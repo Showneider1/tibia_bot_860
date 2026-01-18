@@ -1,50 +1,42 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+.venv/
 venv/
-ENV/
 env/
 
-# IDE
+# IDE / Editor
 .vscode/
 .idea/
+*.code-workspace
 *.swp
 *.swo
 *~
-
-# Logs
-logs/
-*.log
-
-# Config
-config.local.yaml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Bot specific
+# Logs
+logs/
+*.log
+
+# Databases / Cache
+*.sqlite3
 *.db
-*.sqlite
-cache/
-temp/
+*.pkl
+*.cache
+*.bak
+
+# Configs sensíveis
+config_secrets.json
+secrets.json
+.env.local
+.env.production
+
+# OneDrive temp
+~$*
