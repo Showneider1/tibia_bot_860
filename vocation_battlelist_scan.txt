@@ -1,0 +1,17 @@
+======================================================================
+🔍 VOCATION SCANNER V3 - BATTLE LIST
+======================================================================
+
+1️⃣ Encontrando processo...
+   ✓ Kaldrox Client_BR Old.exe (PID: 17092)
+
+2️⃣ Abrindo handle...
+   ✓ Handle: 1596
+
+3️⃣ Listando TODOS os nomes na battle list...
+======================================================================
+======================================================================
+
+✅ 0 criaturas/players encontrados!
+
+❌ Nenhuma criatura na battle list!

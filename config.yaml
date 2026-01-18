@@ -1,0 +1,35 @@
+bot:
+  author: Raphael
+  version: 1.0.0
+hotkeys:
+  emergency_stop: end
+  enable_bot: insert
+logging:
+  console: true
+  file: logs/bot.log
+  level: DEBUG
+memory:
+  cache_ttl: 0.05
+player:
+  vocation: Auto
+scripts:
+  aimbot:
+    attack_hotkey: F1
+    blacklist:
+    - Training Assistant
+    - Rashid
+    enabled: true
+    max_distance: 7
+    min_hp_to_attack: 40
+    use_combat_ai: true
+  cavebot:
+    enabled: false
+  healing:
+    enabled: true
+    hp_threshold: 60
+    mana_threshold: 25
+    spell_light: exura
+    spell_strong: exura gran
+    spell_ultimate: exura vita
+  looter:
+    enabled: false

@@ -1,0 +1,73 @@
+bot:
+  name: "TibiaBot860"
+  version: "1.0.0"
+  author: "Seu Nome"
+
+game:
+  process_name: "Kaldrox Client_BR Old.exe"   # ou Tibia.exe, se mudar
+  window_title: "Kaldrox"                     # parte do título da janela
+  version: "8.60"
+
+player:
+  vocation: "Auto"   # Auto, Druid, Sorcerer, Knight, Paladin
+
+logging:
+  level: "DEBUG"     # DEBUG, INFO, WARNING, ERROR
+  file: "logs/bot.log"
+  console: true
+  max_file_size_mb: 10
+  backup_count: 5
+
+memory:
+  cache_ttl: 0.05    # segundos entre leituras de memória cacheadas
+
+scripts:
+  healing:
+    enabled: true
+    hp_threshold: 60
+    mana_threshold: 25
+    spell_light: "exura"
+    spell_strong: "exura gran"
+    spell_ultimate: "exura vita"
+
+  aimbot:
+    enabled: true
+    max_distance: 7
+    attack_hotkey: "F1"
+    min_hp_to_attack: 40
+    use_combat_ai: true
+    blacklist:
+      - "Training Assistant"
+      - "Rashid"
+
+  cavebot:
+    enabled: false
+    loop: true
+    use_pathfinding: true
+    waypoints: []     # depois colocamos waypoints direito
+
+  looter:
+    enabled: false
+    loot_radius: 1
+    open_corpses: true
+    items:
+      3031: "Gold Coin"
+      3035: "Platinum Coin"
+
+ai:
+  pathfinding:
+    max_iterations: 1000
+    cache_size: 100
+
+  combat:
+    auto_flee: true
+    auto_use_skills: true
+    threat_levels:
+      "Dragon": 3
+      "Dragon Lord": 4
+      "Demon": 4
+
+hotkeys:
+  enable_bot: "insert"
+  disable_bot: "delete"      # ainda não usamos, mas já deixo
+  emergency_stop: "end"
