@@ -18,10 +18,12 @@ from src.application.events.event_handlers import EventHandlers
 from src.application.events.event_types import EventType
 from src.core.entities.waypoint import Waypoint
 from src.core.value_objects.position import Position
-from src.infrastructure.logging.logger import get_logger
+from src.infrastructure.logging.logger import setup_logging, get_logger
+from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE
 
 
 def main():
+    setup_logging(level="DEBUG")
     logger = get_logger("Example")
     logger.info("=" * 60)
     logger.info("🎮 TIBIA BOT 8.60 - FASE 2 - SCRIPT ENGINE")
@@ -33,7 +35,14 @@ def main():
     injector = KeyboardInjector(window_title_hint="Tibia")
 
     # Cria bot engine
-    bot = BotEngine(pm, memory_reader, injector)
+    bot = BotEngine(
+        pm, 
+        memory_reader, 
+        injector,
+        player_addresses=PLAYER,
+        battle_list_addresses=BATTLE_LIST,
+        creature_offsets=CREATURE
+    )
 
     if not bot.start():
         logger.error("Falha ao conectar. Certifique-se que o Tibia está aberto.")
@@ -92,7 +101,7 @@ def main():
     logger.info("Habilitando scripts...")
     bot.script_engine.enable_script("HealingBot")
     bot.script_engine.enable_script("AimBot")
-    # bot.script_engine.enable_script("CaveBot")  # Descomente para ativar
+    bot.script_engine.enable_script("CaveBot")  # Descomente para ativar
     # bot.script_engine.enable_script("Looter")   # Descomente para ativar
 
     # Lista scripts

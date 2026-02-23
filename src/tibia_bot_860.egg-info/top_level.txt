@@ -1,0 +1,13 @@
+__init__
+ai
+application
+config
+core
+infrastructure
+logs
+main
+presentation
+shared
+tibia_bot_860
+ui
+utils

@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: tibia-bot-860
+Version: 0.1.0
+Summary: Bot inteligente para Tibia 8.60 com IA
+Author-email: Your Name <your.email@example.com>
+License: MIT
+Requires-Python: >=3.10
+License-File: LICENSE
+Requires-Dist: psutil>=5.9.8
+Requires-Dist: PySide6>=6.6.1
+Requires-Dist: pywin32>=306
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.3; extra == "dev"
+Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+Requires-Dist: black>=23.12.1; extra == "dev"
+Requires-Dist: mypy>=1.7.1; extra == "dev"
+Dynamic: license-file

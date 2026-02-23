@@ -5,7 +5,8 @@ Fonte: https://github.com/ianobermiller/tibiaapi/blob/master/tibiaapi/Addresses/
 
 from src.core.value_objects.address import MemoryAddress
 
-PROCESS_NAME = "Kaldrox Client_BR Old.exe"
+# Nome exato do processo que identificámos
+PROCESS_NAME = "Not Open.exe"
 
 # Base: Player.Experience = 0x63FE8C
 PLAYER_BASE_EXP = MemoryAddress(0x63FE8C)
@@ -19,16 +20,20 @@ PLAYER = {
     "magic_level": PLAYER_BASE_EXP.with_offset(-8),    # 0x63FE84 (Experience - 8)
     "level_percent": PLAYER_BASE_EXP.with_offset(-12), # 0x63FE80 (Experience - 12)
     "magic_percent": PLAYER_BASE_EXP.with_offset(-16), # 0x63FE7C (Experience - 16)
-    "mana": PLAYER_BASE_EXP.with_offset(-20),          # 0x63FE6C (Experience - 20)
-    "mana_max": PLAYER_BASE_EXP.with_offset(-24),      # 0x63FE68 (Experience - 24)
-    "soul": PLAYER_BASE_EXP.with_offset(-28),          # 0x63FE64 (Experience - 28)
-    "stamina": PLAYER_BASE_EXP.with_offset(-32),       # 0x63FE60 (Experience - 32)
-    "capacity": PLAYER_BASE_EXP.with_offset(-36),      # 0x63FE5C (Experience - 36)
-    "flags": PLAYER_BASE_EXP.with_offset(-108),        # 0x63FE24 (Experience - 108) - contém vocation
-    # Posição de destino (não é posição atual, mas vamos testar)
-    "goto_x": PLAYER_BASE_EXP.with_offset(80),         # 0x63FEDC (Experience + 80)
-    "goto_y": PLAYER_BASE_EXP.with_offset(76),         # 0x63FED8 (GoToX - 4)
-    "goto_z": PLAYER_BASE_EXP.with_offset(72),         # 0x63FED4 (GoToX - 8)
+    "mana":          PLAYER_BASE_EXP.with_offset(-20),   # 0x63FE78 (Experience - 20)
+    "mana_max":      PLAYER_BASE_EXP.with_offset(-24),   # 0x63FE74 (Experience - 24)
+    "soul":          PLAYER_BASE_EXP.with_offset(-28),   # 0x63FE70 (Experience - 28)
+    "stamina":       PLAYER_BASE_EXP.with_offset(-32),   # 0x63FE6C (Experience - 32)
+    "capacity":      PLAYER_BASE_EXP.with_offset(-36),   # 0x63FE68 (Experience - 36)
+    "flags":         PLAYER_BASE_EXP.with_offset(-108),  # 0x63FE20 (Experience - 108)
+
+    
+    # === NOVOS ENDEREÇOS REAIS DE POSIÇÃO ===
+    "pos_x": MemoryAddress(0x640958),
+    "pos_y": MemoryAddress(0x640954),
+    "pos_z": MemoryAddress(0x640950),
+    # ========================================
+    
     # Endereços de skills
     "fist_percent": MemoryAddress(0x63FE24),
 }
