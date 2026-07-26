@@ -11,7 +11,7 @@ from src.infrastructure.logging.logger import get_logger
 from src.application.bot_engine import BotEngine, EventType
 
 # Importa endereços oficiais da TibiaAPI
-from src.infrastructure.tibia_addresses import (
+from src.core.constants.addresses_860 import (
     PLAYER,
     BATTLE_LIST,
     CREATURE,
@@ -35,7 +35,7 @@ class BotApplication:
             # Cria componentes de infraestrutura
             process_manager = ProcessManager()
             memory_reader = MemoryReader(process_manager)
-            keyboard_injector = KeyboardInjector(process_manager)
+            keyboard_injector = KeyboardInjector()
 
             # Cria BotEngine com endereços da TibiaAPI
             self.bot_engine = BotEngine(
@@ -86,7 +86,7 @@ class BotApplication:
 
     def _on_player_health_low(self, player, **kwargs):
         """Disparado quando HP está baixo."""
-        self._log.warning(f"⚠️  HP BAIXO: {player.health}/{player.health_max} ({player.hp_percent():.0f}%)")
+        self._log.warning(f"⚠️  HP BAIXO: {player.stats.health}/{player.stats.max_health} ({player.hp_percent():.0f}%)")
 
     def _on_creature_detected(self, creature, player, **kwargs):
         """Disparado quando criatura é detectada."""
@@ -142,8 +142,8 @@ class BotApplication:
                 elif cmd == "status":
                     player_info = (
                         f"ID={self.bot_engine.player.id}, "
-                        f"HP={self.bot_engine.player.health}/{self.bot_engine.player.health_max}, "
-                        f"Mana={self.bot_engine.player.mana}/{self.bot_engine.player.mana_max}"
+                        f"HP={self.bot_engine.player.stats.health}/{self.bot_engine.player.stats.max_health}, "
+                        f"Mana={self.bot_engine.player.stats.mana}/{self.bot_engine.player.stats.max_mana}"
                         if self.bot_engine.player
                         else "Player não carregado"
                     )

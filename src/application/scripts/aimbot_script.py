@@ -69,20 +69,14 @@ class AimbotScript(BaseScript):
         if self._combat_ai and self.config.get("use_combat_ai"):
             target = self._combat_ai.get_target(player, valid_creatures)
         else:
-            # Fallback: usa targeting service padrão
-            target = bot_engine._targeting.select_target(
-                player,
-                valid_creatures,
-                bot_engine.config.get("combat_mode", "lowest_hp"),
-                self.config["max_distance"],
-            )
+            target = valid_creatures[0]
 
         if not target:
             return False
 
         # Ataca
-        bot_engine._combat.attack_with_hotkey(target, self.config["attack_hotkey"])
+        bot_engine._injector.send_hotkey(self.config["attack_hotkey"])
         self._last_attack_time = time.time()
-        self._log.info(f"⚔️ Attacking: {target.name} (HP: {target.stats.health}%)")
+        self._log.info(f"⚔️ Attacking: {target.name}")
         
         return True

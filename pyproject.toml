@@ -1,34 +1,53 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tibia-bot-860"
 version = "0.1.0"
 description = "Bot inteligente para Tibia 8.60 com IA"
-authors = [{name = "Your Name", email = "your.email@example.com"}]
+authors = [{name = "Raphael"}]
 license = {text = "MIT"}
 requires-python = ">=3.10"
+readme = "README.md"
+
 dependencies = [
-    "psutil>=5.9.8",
-    "PySide6>=6.6.1",
-    "pywin32>=306",
+    "psutil>=5.9.0",
+    "pyyaml>=6.0",
+    "pywin32>=305 ; sys_platform == 'win32'",
+    "keyboard>=0.13.5 ; sys_platform == 'win32'",
+    "pyautogui>=0.9.53 ; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.3",
+    "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "black>=23.12.1",
-    "mypy>=1.7.1",
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["src*"]
+
+[project.scripts]
+tibiabot = "src.main:main"
 
 [tool.black]
 line-length = 100
 target-version = ['py310']
 
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-v --strict-markers"
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

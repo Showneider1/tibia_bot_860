@@ -49,7 +49,7 @@ class HealingScript(BaseScript):
         spell = self._select_heal_spell(hp_pct)
         
         # Lança spell
-        bot_engine._combat.cast_spell(spell)
+        bot_engine._injector.cast_spell(spell)
         self._last_heal_time = time.time()
         self._log.info(f"🩹 Healing com '{spell}' (HP: {hp_pct:.1f}%)")
         

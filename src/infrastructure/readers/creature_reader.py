@@ -4,6 +4,8 @@ Fonte: TibiaAPI 8.60 (https://github.com/ianobermiller/tibiaapi)
 """
 from typing import List
 from src.core.entities.creature import Creature
+from src.core.value_objects.position import Position
+from src.core.value_objects.stats import Stats
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.logging.logger import get_logger
 
@@ -70,13 +72,17 @@ class CreatureReader:
                         continue
 
                     # Cria objeto creature
+                    stats = Stats(health=hp_bar, max_health=100, mana=0, max_mana=0)
+                    position = Position(x, y, z)
+                    name_clean = name.strip() if name else "Unknown"
+
                     creature = Creature(
                         id=creature_id,
-                        name=name.strip() if name else "Unknown",
-                        x=x,
-                        y=y,
-                        z=z,
-                        hp_bar=hp_bar,
+                        name=name_clean,
+                        position=position,
+                        stats=stats,
+                        visible=True,
+                        walking=False,
                     )
 
                     creatures.append(creature)

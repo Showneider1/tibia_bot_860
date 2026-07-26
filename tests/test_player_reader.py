@@ -47,8 +47,8 @@ class TestPlayerReader(unittest.TestCase):
 
         self.assertIsNotNone(player)
         self.assertEqual(player.id, 12345)
-        self.assertEqual(player.health, 500)
-        self.assertEqual(player.health_max, 500)
+        self.assertEqual(player.stats.health, 500)
+        self.assertEqual(player.stats.max_health, 500)
         self.assertEqual(player.level, 50)
 
     def test_get_player_not_loaded(self):
@@ -137,5 +137,5 @@ class TestCreatureReader(unittest.TestCase):
         self.assertGreaterEqual(len(creatures), 0)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

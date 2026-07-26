@@ -5,7 +5,7 @@ Fonte: https://github.com/ianobermiller/tibiaapi/blob/master/tibiaapi/Addresses/
 
 from src.core.value_objects.address import MemoryAddress
 
-PROCESS_NAME = "Kaldrox Client_BR Old.exe"
+PROCESS_NAME = "Kaldrox Old Client.exe"
 
 # Base: Player.Experience = 0x63FE8C
 PLAYER_BASE_EXP = MemoryAddress(0x63FE8C)

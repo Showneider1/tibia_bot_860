@@ -1,13 +1,15 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.env
-.env.*
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtualenvs
 .venv/
 venv/
 env/
+.env
 
 # IDE / Editor
 .vscode/
@@ -32,11 +34,18 @@ logs/
 *.cache
 *.bak
 
-# Configs sensíveis
+# Local configs / secrets
+config.local.yaml
 config_secrets.json
 secrets.json
 .env.local
 .env.production
 
-# OneDrive temp
-~$*
+# OneDrive temporaries
+~*$*
+
+# Permitir .gitkeep explicitamente
+!*/.gitkeep
+
+# Logs duplicados que ressurgiram de versões antigas
+**/tibia_bot_860/data/logs/

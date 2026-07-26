@@ -5,7 +5,7 @@ Gerencia loop principal, leitura de memória, scripts e eventos.
 from __future__ import annotations
 
 import time
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List
 
 from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
@@ -17,64 +17,18 @@ from src.infrastructure.readers.creature_reader import CreatureReader
 from src.core.entities.player import Player
 from src.core.entities.creature import Creature
 from src.core.value_objects.position import Position
+from src.core.value_objects.address import MemoryAddress
 from src.core.value_objects.stats import Stats
 
-# Importa ScriptEngine já existente
+from src.application.events.event_manager import EventManager
+from src.application.events.event_types import EventType
 from src.application.scripts.script_engine import ScriptEngine
 from src.application.scripts.base_script import BaseScript
 
 
-# ======================================================================
-# Event Types
-# ======================================================================
-class EventType:
-    """Tipos de eventos disparados pelo bot."""
-    PLAYER_HEALTH_LOW = "PLAYER_HEALTH_LOW"
-    PLAYER_MANA_LOW = "PLAYER_MANA_LOW"
-    CREATURE_DETECTED = "CREATURE_DETECTED"
-    LEVEL_UP = "LEVEL_UP"
-    PLAYER_LOADED = "PLAYER_LOADED"
-    CONNECTION_LOST = "CONNECTION_LOST"
+__all__ = ["BotEngine", "EventType", "EventManager"]
 
 
-# ======================================================================
-# EventManager
-# ======================================================================
-class EventManager:
-    """Gerenciador de eventos com publish/subscribe."""
-
-    def __init__(self):
-        self._log = get_logger("EventManager")
-        self._subscribers: Dict[str, List[Callable]] = {}
-
-    def subscribe(self, event_type: str, handler: Callable) -> None:
-        """Registra handler para um tipo de evento."""
-        self._subscribers.setdefault(event_type, []).append(handler)
-        self._log.debug(f"Handler registrado para {event_type}: {handler.__name__}")
-
-    def unsubscribe(self, event_type: str, handler: Callable) -> None:
-        """Remove handler de um tipo de evento."""
-        if event_type in self._subscribers:
-            self._subscribers[event_type] = [
-                h for h in self._subscribers[event_type] if h != handler
-            ]
-
-    def publish(self, event_type: str, **kwargs) -> None:
-        """Publica um evento para todos os handlers registrados."""
-        handlers = self._subscribers.get(event_type, [])
-        if not handlers:
-            return
-
-        for handler in handlers:
-            try:
-                handler(**kwargs)
-            except Exception as e:
-                self._log.error(f"Erro em handler de {event_type}: {e}", exc_info=True)
-
-
-# ======================================================================
-# BotEngine
-# ======================================================================
 class BotEngine:
     """
     Engine principal do bot.
@@ -239,7 +193,7 @@ class BotEngine:
         """
         try:
             # Tenta ler um valor simples como teste de conexão
-            _ = self._memory.read_int(0x63FE8C)  # Player.Experience
+            _ = self._memory.read_int(MemoryAddress(0x63FE8C))
             self._connection_retry_count = 0
             return True
 
@@ -251,7 +205,7 @@ class BotEngine:
                     f"❌ Conexão perdida após {self._max_retry_attempts} tentativas."
                 )
                 self._connected = False
-                self.event_manager.publish(EventType.CONNECTION_LOST)
+                self.event_manager.emit(EventType.CONNECTION_LOST)
                 return False
 
             self._log.debug(f"Reconexão tentativa {self._connection_retry_count}...")
@@ -269,27 +223,27 @@ class BotEngine:
 
         # Primeiro carregamento do player
         if self._last_player is None and self.player:
-            self._log.info(f"✓ Player carregado: ID={self.player.id} HP={self.player.health}/{self.player.health_max}")
-            self.event_manager.publish(EventType.PLAYER_LOADED, player=self.player)
+            self._log.info(f"✓ Player carregado: ID={self.player.id} HP={self.player.stats.health}/{self.player.stats.max_health}")
+            self.event_manager.emit(EventType.PLAYER_LOADED, player=self.player)
 
         # HP baixo
         if self.player.hp_percent() < 30:
-            self.event_manager.publish(EventType.PLAYER_HEALTH_LOW, player=self.player)
+            self.event_manager.emit(EventType.PLAYER_HEALTH_LOW, player=self.player)
 
         # Mana baixa
         if self.player.mana_percent() < 20:
-            self.event_manager.publish(EventType.PLAYER_MANA_LOW, player=self.player)
+            self.event_manager.emit(EventType.PLAYER_MANA_LOW, player=self.player)
 
         # Level up
         if self._last_player and self.player.level > self._last_player.level:
             self._log.info(f"🎉 Level Up! {self.player.level - 1} → {self.player.level}")
-            self.event_manager.publish(EventType.LEVEL_UP, player=self.player)
+            self.event_manager.emit(EventType.LEVEL_UP, player=self.player)
 
         # Novas criaturas apareceram
         last_ids = {c.id for c in (self._last_creatures or [])}
         for creature in self.creatures or []:
             if creature.id not in last_ids:
-                self.event_manager.publish(
+                self.event_manager.emit(
                     EventType.CREATURE_DETECTED,
                     creature=creature,
                     player=self.player,

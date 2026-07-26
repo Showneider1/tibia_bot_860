@@ -4,6 +4,8 @@ Fonte: TibiaAPI 8.60 (https://github.com/ianobermiller/tibiaapi)
 """
 from typing import Optional
 from src.core.entities.player import Player
+from src.core.value_objects.position import Position
+from src.core.value_objects.stats import Stats
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.logging.logger import get_logger
 
@@ -58,13 +60,20 @@ class PlayerReader:
                 self._log.warning(f"Valores de mana inválidos: {mana}/{mana_max}")
                 return self._last_valid_player
 
-            # Cria player com dados lidos
+            stats = Stats(
+                health=health,
+                max_health=health_max,
+                mana=mana,
+                max_mana=mana_max,
+            )
+
+            position = self._read_position()
+
             player = Player(
                 id=player_id,
-                health=health,
-                health_max=health_max,
-                mana=mana,
-                mana_max=mana_max,
+                name="",
+                position=position,
+                stats=stats,
                 level=level,
                 experience=experience,
                 magic_level=magic_level,
@@ -82,3 +91,12 @@ class PlayerReader:
             self._log.error(f"Erro ao ler player: {e}", exc_info=True)
             # Retorna último estado válido conhecido
             return self._last_valid_player
+
+    def _read_position(self) -> Position:
+        try:
+            x = self._memory.read_int(self._addresses.get("goto_x", self._addresses["health"]))
+            y = self._memory.read_int(self._addresses.get("goto_y", self._addresses["health"]))
+            z = self._memory.read_int(self._addresses.get("goto_z", self._addresses["health"]))
+            return Position(x, y, z)
+        except Exception:
+            return Position(0, 0, 0)

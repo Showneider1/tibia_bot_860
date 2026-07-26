@@ -18,6 +18,7 @@ from src.application.events.event_handlers import EventHandlers
 from src.application.events.event_types import EventType
 from src.core.entities.waypoint import Waypoint
 from src.core.value_objects.position import Position
+from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE
 from src.infrastructure.logging.logger import get_logger
 
 
@@ -33,7 +34,7 @@ def main():
     injector = KeyboardInjector(window_title_hint="Tibia")
 
     # Cria bot engine
-    bot = BotEngine(pm, memory_reader, injector)
+    bot = BotEngine(pm, memory_reader, injector, PLAYER, BATTLE_LIST, CREATURE)
 
     if not bot.start():
         logger.error("Falha ao conectar. Certifique-se que o Tibia está aberto.")

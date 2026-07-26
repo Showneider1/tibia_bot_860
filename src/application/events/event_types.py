@@ -8,4 +8,5 @@ class EventType(str, Enum):
     CREATURE_DETECTED = "creature_detected"
     CREATURE_KILLED = "creature_killed"
     LEVEL_UP = "level_up"
+    PLAYER_LOADED = "player_loaded"
     CONNECTION_LOST = "connection_lost"
