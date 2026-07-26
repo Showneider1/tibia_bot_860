@@ -23,6 +23,7 @@ from src.infrastructure.logging.logger import get_logger
 
 
 def main():
+    setup_logging(level="DEBUG")
     logger = get_logger("Example")
     logger.info("=" * 60)
     logger.info("🎮 TIBIA BOT 8.60 - FASE 2 - SCRIPT ENGINE")
@@ -93,7 +94,7 @@ def main():
     logger.info("Habilitando scripts...")
     bot.script_engine.enable_script("HealingBot")
     bot.script_engine.enable_script("AimBot")
-    # bot.script_engine.enable_script("CaveBot")  # Descomente para ativar
+    bot.script_engine.enable_script("CaveBot")  # Descomente para ativar
     # bot.script_engine.enable_script("Looter")   # Descomente para ativar
 
     # Lista scripts

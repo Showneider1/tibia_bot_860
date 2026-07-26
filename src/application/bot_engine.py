@@ -2,8 +2,6 @@
 BotEngine - núcleo do bot Tibia 8.60.
 Gerencia loop principal, leitura de memória, scripts e eventos.
 """
-from __future__ import annotations
-
 import time
 from typing import Optional, Dict, Any, List
 
@@ -11,8 +9,6 @@ from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.injection.keyboard_injector import KeyboardInjector
 from src.infrastructure.logging.logger import get_logger
-from src.infrastructure.readers.player_reader import PlayerReader
-from src.infrastructure.readers.creature_reader import CreatureReader
 
 from src.core.entities.player import Player
 from src.core.entities.creature import Creature
@@ -23,8 +19,11 @@ from src.core.value_objects.stats import Stats
 from src.application.events.event_manager import EventManager
 from src.application.events.event_types import EventType
 from src.application.scripts.script_engine import ScriptEngine
-from src.application.scripts.base_script import BaseScript
+from src.application.events.event_manager import EventManager
+from src.application.events.event_types import EventType
 
+from src.infrastructure.readers.player_reader import PlayerReader
+from src.infrastructure.readers.creature_reader import CreatureReader
 
 __all__ = ["BotEngine", "EventType", "EventManager"]
 
@@ -32,11 +31,7 @@ __all__ = ["BotEngine", "EventType", "EventManager"]
 class BotEngine:
     """
     Engine principal do bot.
-    Responsável por:
-      - Conectar ao processo Tibia
-      - Ler estado do jogo (player, criaturas) via readers
-      - Disparar eventos baseado em mudanças de estado
-      - Executar scripts via ScriptEngine
+    Responsável por conectar ao processo, ler a memória e executar o ScriptEngine.
     """
 
     def __init__(
@@ -44,9 +39,9 @@ class BotEngine:
         process_manager: ProcessManager,
         memory_reader: MemoryReader,
         keyboard_injector: KeyboardInjector,
-        player_addresses: dict,
-        battle_list_addresses: dict,
-        creature_offsets: dict,
+        player_addresses: Dict[str, Any],
+        battle_list_addresses: Dict[str, Any],
+        creature_offsets: Dict[str, int]
     ):
         self._log = get_logger("BotEngine")
 
@@ -54,11 +49,9 @@ class BotEngine:
         self._memory = memory_reader
         self._injector = keyboard_injector
 
-        # Inicializa readers com endereços
+        # Inicializa os leitores reais de memória
         self._player_reader = PlayerReader(self._memory, player_addresses)
-        self._creature_reader = CreatureReader(
-            self._memory, battle_list_addresses, creature_offsets
-        )
+        self._creature_reader = CreatureReader(self._memory, battle_list_addresses, creature_offsets)
 
         self.enabled: bool = False
         self.config: Dict[str, Any] = {
@@ -71,10 +64,8 @@ class BotEngine:
         self.player: Optional[Player] = None
         self.creatures: List[Creature] = []
 
-        # Engine de scripts
+        # Sistemas de Scripts e Eventos
         self.script_engine = ScriptEngine()
-
-        # Event system
         self.event_manager = EventManager()
 
         # Snapshot anterior para detecção de eventos
@@ -82,74 +73,55 @@ class BotEngine:
         self._last_creatures: List[Creature] = []
 
         self._connected: bool = False
-        self._connection_retry_count: int = 0
-        self._max_retry_attempts: int = 3
 
-    # ------------------------------------------------------------------
-    # Inicialização / conexão
-    # ------------------------------------------------------------------
     def start(self) -> bool:
-        """
-        Conecta ao processo do Tibia e faz leitura inicial.
-        Returns:
-            True se conectado com sucesso.
-        """
+        """Conecta ao processo do Tibia e faz leitura inicial."""
         try:
-            # Conecta ao processo
-            self._pm.attach()
+            if not self._pm.is_running():
+                self._pm.attach()
 
             self._connected = True
-            self._connection_retry_count = 0
-            
             self._log.info("✓ Bot conectado ao processo Tibia.")
             self._log.info("✓ Memory Readers ativados (PlayerReader + CreatureReader).")
             self._log.info(f"✓ Script Engine pronto ({len(self.script_engine.list_scripts())} scripts).")
             self._log.info("⚠️  Auto-heal e Auto-attack DESABILITADOS por padrão (use bot.enabled = True).")
 
             return True
-
         except Exception as e:
-            self._log.error(f"❌ Erro ao conectar ao Tibia: {e}", exc_info=True)
+            self._log.error(f"Erro ao conectar ao Tibia: {e}", exc_info=True)
             self._connected = False
             return False
 
     def stop(self) -> None:
-        """Desconecta e limpa estado."""
+        """Desconecta e limpa o estado."""
         self.enabled = False
         self._connected = False
-        self._log.info("Bot parado.")
+        self._log.info("BotEngine parado.")
 
-    # ------------------------------------------------------------------
-    # Loop público
-    # ------------------------------------------------------------------
     def tick(self) -> None:
-        """
-        Tick público chamado periodicamente pelo main loop.
-        - Atualiza leitura de memória
-        - Dispara eventos
-        - Executa scripts se habilitado
-        """
+        """Tick do main loop. Lê a memória e corre os scripts."""
         if not self._connected:
-            # Tenta reconectar
-            if self._check_and_reconnect():
-                self._log.info("✓ Reconectado com sucesso.")
             return
 
-        # Atualiza estado
+        start_time = time.perf_counter()
+        
+        # 1. Atualiza leitura de memória
         self._update_state()
 
-        # Processa eventos disparados por mudanças de estado
+        # 2. Dispara eventos
         self._process_events()
 
-        # Executa scripts se bot habilitado
+        # 3. Executa scripts se o bot estiver habilitado
         if self.enabled and self.config.get("use_script_engine", True):
             self._run_scripts()
+        
+        elapsed = (time.perf_counter() - start_time) * 1000
+        # Opcional: Loga se o ciclo demorar mais do que o esperado
+        if elapsed > 50:
+             self._log.debug(f"Scripts levaram {elapsed:.1f}ms (target: <50ms)")
 
     def run_loop(self, interval: float = 0.1) -> None:
-        """
-        Loop interno opcional.
-        Se você quer delegar o loop todo ao BotEngine.
-        """
+        """Loop interno, caso pretenda delegar o controlo de tempo ao BotEngine."""
         self._log.info("BotEngine loop iniciado.")
         try:
             while True:
@@ -162,28 +134,30 @@ class BotEngine:
         finally:
             self.stop()
 
-    # ------------------------------------------------------------------
-    # Leitura de estado
-    # ------------------------------------------------------------------
     def _update_state(self) -> None:
-        """Atualiza player e criaturas usando os readers."""
+        """Lê a memória e sincroniza a posição real da BattleList."""
         self._last_player = self.player
         self._last_creatures = self.creatures
 
         try:
-            # Lê player
+            # Lê a entidade Player e todas as criaturas no ecrã
             self.player = self._player_reader.get_player()
+            self.creatures = self._creature_reader.get_creatures()
 
-            # Lê criaturas só se player está carregado
-            if self.player:
-                self.creatures = self._creature_reader.get_creatures()
-            else:
-                self.creatures = []
+            # =========================================================
+            # CORREÇÃO DA POSIÇÃO (Sincronização com a BattleList)
+            # =========================================================
+            # Como o goto_x não é exato, procuramos o nosso char na lista
+            # de criaturas para roubar as coordenadas físicas perfeitas!
+            if self.player and self.creatures:
+                for creature in self.creatures:
+                    if creature.id == self.player.id:
+                        self.player.position = creature.position
+                        self.player.name = creature.name
+                        break
 
         except Exception as e:
             self._log.error(f"Erro ao atualizar estado: {e}", exc_info=True)
-            self.player = None
-            self.creatures = []
 
     def _check_and_reconnect(self) -> bool:
         """
@@ -215,9 +189,7 @@ class BotEngine:
     # Eventos
     # ------------------------------------------------------------------
     def _process_events(self) -> None:
-        """
-        Compara estado atual com anterior e dispara eventos.
-        """
+        """Verifica alterações e dispara eventos."""
         if not self.player:
             return
 
@@ -249,21 +221,11 @@ class BotEngine:
                     player=self.player,
                 )
 
-    # ------------------------------------------------------------------
-    # Scripts
-    # ------------------------------------------------------------------
     def _run_scripts(self) -> None:
-        """Executa todos os scripts registrados via ScriptEngine."""
+        """Corre os scripts e injeta o contexto."""
         context = {
             "player": self.player,
             "creatures": self.creatures,
             "bot_engine": self,
         }
-
-        start_time = time.perf_counter()
         self.script_engine.execute_all(context)
-        elapsed = time.perf_counter() - start_time
-
-        # Avisa se scripts demoraram muito (target: <50ms)
-        if elapsed > 0.05:
-            self._log.debug(f"Scripts levaram {elapsed*1000:.1f}ms (target: <50ms)")

@@ -5,9 +5,8 @@ import win32gui
 from src.core.interfaces.injector_interface import ICommandInjector
 from src.infrastructure.logging.logger import get_logger
 
-
 class KeyboardInjector(ICommandInjector):
-    """Injeção de comandos via teclado na janela do cliente."""
+    """Injeção de comandos via mensagens do Windows (PostMessage) para rodar em background."""
 
     def __init__(self, window_title_hint: str = "Tibia") -> None:
         self._window_title_hint = window_title_hint
@@ -30,38 +29,46 @@ class KeyboardInjector(ICommandInjector):
         return False
 
     def focus_client(self) -> bool:
+        """Ainda mantido por compatibilidade, mas idealmente não precisaremos usar."""
         if not self._hwnd and not self._find_window():
-            self._log.warning("Janela do cliente não encontrada.")
             return False
         try:
             win32gui.SetForegroundWindow(self._hwnd)
             time.sleep(0.05)
             return True
-        except Exception as e:
-            self._log.error("Erro ao focar cliente: %s", e)
+        except Exception:
             return False
 
-    def _send_text(self, text: str) -> None:
-        if not self.focus_client():
+    def send_key_background(self, vk_code: int) -> None:
+        """Envia tecla para o cliente minimizado/em background."""
+        if not self._hwnd and not self._find_window():
+            self._log.warning("Janela do cliente não encontrada.")
             return
+
+        # Envia a mensagem de KeyDown e KeyUp diretamente para a janela
+        win32gui.PostMessage(self._hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+        time.sleep(0.02) # Delay humano e de processamento do client
+        win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP, vk_code, 0)
+
+    def _send_text_background(self, text: str) -> None:
+        """Digita texto em background (ótimo para magias)."""
+        if not self._hwnd and not self._find_window():
+            return
+            
         for ch in text:
             vk = win32api.VkKeyScan(ch)
-            win32api.keybd_event(vk, 0, 0, 0)
+            self.send_key_background(vk)
             time.sleep(0.01)
-            win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
-        # Enter
-        win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
-        time.sleep(0.01)
-        win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+            
+        # Pressiona ENTER
+        self.send_key_background(win32con.VK_RETURN)
 
     def cast_spell(self, spell_words: str) -> None:
-        self._log.debug("Casting spell: %s", spell_words)
-        self._send_text(spell_words)
+        self._log.debug(f"Casting spell (background): {spell_words}")
+        self._send_text_background(spell_words)
 
     def send_hotkey(self, key: str) -> None:
-        """Envia F1–F12, etc."""
-        if not self.focus_client():
-            return
+        """Envia F1-F12 em background."""
         mapping = {
             "F1": win32con.VK_F1, "F2": win32con.VK_F2, "F3": win32con.VK_F3,
             "F4": win32con.VK_F4, "F5": win32con.VK_F5, "F6": win32con.VK_F6,
@@ -70,8 +77,6 @@ class KeyboardInjector(ICommandInjector):
         }
         vk = mapping.get(key.upper())
         if not vk:
-            self._log.warning("Hotkey não suportada: %s", key)
+            self._log.warning(f"Hotkey não suportada: {key}")
             return
-        win32api.keybd_event(vk, 0, 0, 0)
-        time.sleep(0.01)
-        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+        self.send_key_background(vk)
