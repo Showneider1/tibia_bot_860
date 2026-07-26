@@ -1,5 +1,5 @@
 """
-Gerenciador do handle do processo Tibia/Kaldrox com suporte a ASLR.
+Gerenciador do handle do processo Tibia/Kaldrox.
 """
 import ctypes
 from ctypes import wintypes
@@ -9,7 +9,6 @@ from typing import Optional
 from src.core.constants.addresses_860 import PROCESS_NAME
 from src.infrastructure.logging.logger import get_logger
 
-# --- Configurações Win32 API (Kernel32) ---
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -18,7 +17,6 @@ kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
 
-# --- Configurações Win32 API (Psapi) para ASLR Bypass ---
 psapi = ctypes.WinDLL("psapi", use_last_error=True)
 LIST_MODULES_ALL = 0x03
 
@@ -31,7 +29,6 @@ psapi.EnumProcessModulesEx.argtypes = [
 ]
 psapi.EnumProcessModulesEx.restype = wintypes.BOOL
 
-# --- Constantes de Privilégio ---
 PROCESS_VM_READ = 0x0010
 PROCESS_VM_WRITE = 0x0020
 PROCESS_VM_OPERATION = 0x0008
@@ -53,15 +50,13 @@ class ProcessManager:
         self.process_handle: Optional[int] = None
         self.process_id: Optional[int] = None
         self.last_error: Optional[int] = None
-        
-        # Padrão estático do Tibia 8.60 Clássico (Sem ASLR)
-        self.base_address: int = 0x400000 
+        # Tibia 8.60 clássico / Kaldrox: base estática em 0x400000 (sem ASLR)
+        self.base_address: int = 0x400000
 
     def attach(self) -> bool:
         """Localiza o processo pelo nome, abre o handle e descobre o endereço base."""
         found_pid = None
 
-        # 1. Localização segura via psutil
         for proc in psutil.process_iter(["pid", "name"]):
             try:
                 name = (proc.info["name"] or "").lower()
@@ -77,7 +72,6 @@ class ProcessManager:
 
         self.process_id = found_pid
 
-        # 2. Tentativa de obter o Handle com escalonamento de privilégios
         handle = kernel32.OpenProcess(PROCESS_RW_ACCESS, False, found_pid)
 
         if not handle:
@@ -96,11 +90,17 @@ class ProcessManager:
 
         self.process_handle = handle
         self.last_error = None
-        
-        # 3. Integração ASLR: Resolve o endereço real do módulo principal na memória
-        self.base_address = self._resolve_base_address()
-        
-        self._log.info(f"✓ Anexado com sucesso | PID: {self.process_id} | Base Address: {hex(self.base_address)}")
+
+        # Resolve base address apenas para log informativo
+        detected_base = self._resolve_base_address()
+        # CORREÇÃO: Ignora base dinâmica detectada. Endereços do Tibia 8.60
+        # são absolutos/estáticos. Manter sempre 0x400000 para delta = 0.
+        self.base_address = 0x400000
+        self._log.info(
+            f"✓ Anexado com sucesso | PID: {self.process_id} "
+            f"| Base Address detectada: {hex(detected_base)} "
+            f"| Usando: {hex(self.base_address)}"
+        )
         return True
 
     def _resolve_base_address(self) -> int:
@@ -113,16 +113,15 @@ class ProcessManager:
 
         success = psapi.EnumProcessModulesEx(
             self.process_handle,
-            h_mods,  # [CORREÇÃO]: Removido ctypes.byref()
+            h_mods,
             ctypes.sizeof(h_mods),
             ctypes.byref(cb_needed),
             LIST_MODULES_ALL
         )
 
         if success:
-            # O índice [0] do EnumProcessModules é sistematicamente o executável principal (o próprio .exe)
             return h_mods[0]
-        
+
         self._log.warning("Falha ao resolver Base Address dinâmico via PSAPI. Assumindo 0x400000.")
         return 0x400000
 
