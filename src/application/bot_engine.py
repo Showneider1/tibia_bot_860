@@ -134,27 +134,46 @@ class BotEngine:
         finally:
             self.stop()
 
-    def _update_state(self) -> None:
-        """Lê a memória e sincroniza a posição real da BattleList."""
-        self._last_player = self.player
-        self._last_creatures = self.creatures
-
-        try:
-            # Lê a entidade Player e todas as criaturas no ecrã
-            self.player = self._player_reader.get_player()
-            self.creatures = self._creature_reader.get_creatures()
-
-            # =========================================================
+def _update_state(self) -> None:
+         """Lê a memória e sincroniza a posição real da BattleList."""
+         self._log.debug("[BOT ENGINE DEBUG] _update_state called")
+         self._last_player = self.player
+         self._last_creatures = self.creatures
+ 
+         try:
+             self._log.debug("[BOT ENGINE DEBUG] About to call PlayerReader.get_player()")
+             self.player = self._player_reader.get_player()
+             self._log.debug(f"[BOT ENGINE DEBUG] PlayerReader.get_player() returned: {self.player}")
+             if self.player:
+                 self._log.debug(f"[BOT ENGINE DEBUG] Player details - ID: {getattr(self.player, 'id', 'None')}, Name: '{getattr(self.player, 'name', 'None')}', Level: {getattr(self.player, 'level', 'None')}")
+             
+             self._log.debug("[BOT ENGINE DEBUG] About to call CreatureReader.get_creatures()")
+             self.creatures = self._creature_reader.get_creatures()
+             self._log.debug(f"[BOT ENGINE DEBUG] CreatureReader.get_creatures() returned {len(self.creatures)} creatures")
+             
+# =========================================================
             # CORREÇÃO DA POSIÇÃO (Sincronização com a BattleList)
             # =========================================================
             # Como o goto_x não é exato, procuramos o nosso char na lista
             # de criaturas para roubar as coordenadas físicas perfeitas!
+            self._log.debug("[BOT ENGINE DEBUG] Starting position correction from creature list...")
             if self.player and self.creatures:
+                self._log.debug(f"[BOT ENGINE DEBUG] Player ID: {self.player.id}, Creatures count: {len(self.creatures)}")
                 for creature in self.creatures:
                     if creature.id == self.player.id:
+                        old_pos = f"({self.player.position.x}, {self.player.position.y}, {self.player.position.z})"
+                        new_pos = f"({creature.position.x}, {creature.position.y}, {creature.position.z})"
                         self.player.position = creature.position
-                        self.player.name = creature.name
+                        self.player.name = creature.name  # Also update name from creature list (might be more accurate)
+                        self._log.debug(f"[BOT ENGINE DEBUG] Found player in creature list! Updated position from {old_pos} to {new_pos}")
+                        self._log.debug(f"[BOT ENGINE DEBUG] Also updated player name from '{self.player.name}' to '{creature.name}'")
                         break
+                else:
+                    self._log.debug(f"[BOT ENGINE DEBUG] Player ID {self.player.id} NOT found in creature list")
+            elif not self.player:
+                self._log.debug("[BOT ENGINE DEBUG] No player to correct position for")
+            elif not self.creatures:
+                self._log.debug("[BOT ENGINE DEBUG] No creatures in list to correct position against")
 
         except Exception as e:
             self._log.error(f"Erro ao atualizar estado: {e}", exc_info=True)

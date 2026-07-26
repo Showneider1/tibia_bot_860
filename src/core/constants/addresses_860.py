@@ -24,8 +24,8 @@ PLAYER = {
     "soul":          PLAYER_BASE_EXP.with_offset(-28),   # 0x63FE70 (Experience - 28)
     "stamina":       PLAYER_BASE_EXP.with_offset(-32),   # 0x63FE6C (Experience - 32)
     "capacity":      PLAYER_BASE_EXP.with_offset(-36),   # 0x63FE68 (Experience - 36)
+    "name":          PLAYER_BASE_EXP.with_offset(-50),   # 0x63FE5C (Experience - 50) - TODO: Verify correct offset
     "flags":         PLAYER_BASE_EXP.with_offset(-108),  # 0x63FE20 (Experience - 108)
-
     
     # === NOVOS ENDEREÇOS REAIS DE POSIÇÃO ===
     "pos_x": MemoryAddress(0x640958),

@@ -19,11 +19,14 @@ from src.application.events.event_types import EventType
 from src.core.entities.waypoint import Waypoint
 from src.core.value_objects.position import Position
 from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE
-from src.infrastructure.logging.logger import get_logger
+from src.infrastructure.logging.logger import get_logger, setup_logging
 
 
 def main():
-    setup_logging(level="DEBUG")
+    # Configura logging para arquivo e console
+    import os
+    os.makedirs("logs", exist_ok=True)
+    setup_logging(level="DEBUG", log_file="logs/bot_debug.log")
     logger = get_logger("Example")
     logger.info("=" * 60)
     logger.info("🎮 TIBIA BOT 8.60 - FASE 2 - SCRIPT ENGINE")

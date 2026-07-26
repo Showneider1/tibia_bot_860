@@ -3,6 +3,10 @@ Main - Entry point do bot Tibia 8.60.
 """
 import time
 import sys
+import ctypes
+import logging
+import os  # [NOVO] Importado para operações de sistema de arquivos
+
 from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.injection.keyboard_injector import KeyboardInjector
@@ -17,6 +21,12 @@ from src.core.constants.addresses_860 import (
     CREATURE,
 )
 
+def _is_admin() -> bool:
+    """Verifica se o processo possui privilégios de administrador no Windows."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
 
 class BotApplication:
     """Aplicação principal do bot."""
@@ -31,6 +41,12 @@ class BotApplication:
             self._log.info("=" * 60)
             self._log.info("🤖 TIBIA BOT 8.60 - Inicializando...")
             self._log.info("=" * 60)
+
+            # Fail-fast: Bloqueia a execução se não for Administrador
+            if not _is_admin():
+                self._log.critical("❌ Privilégios insuficientes! O bot requer execução como Administrador.")
+                self._log.critical("Por favor, reinicie seu terminal ou IDE como Administrador e tente novamente.")
+                return False
 
             # Cria componentes de infraestrutura
             process_manager = ProcessManager()
@@ -170,6 +186,21 @@ class BotApplication:
 
 def main():
     """Entry point."""
+    
+    # [NOVO] Configuração global do Logging 
+    import os
+    # Garante que o diretório de logs existe
+    os.makedirs("logs", exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.DEBUG,  # Alterado para DEBUG para capturar todas as mensagens de depuração
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=[
+            logging.FileHandler("logs/bot.log", encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)  # Mantém também o output no console
+        ]
+    )
+    
     app = BotApplication()
 
     if not app.initialize():
