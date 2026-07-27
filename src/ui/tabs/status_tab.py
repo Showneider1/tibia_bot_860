@@ -46,7 +46,7 @@ class StatusTab(ctk.CTkFrame):
         return card
 
     def refresh(self):
-        p = self.app._mock_player
+        p = self.app._player_data
         self._draw_id(p)
         self._draw_vitals(p)
 
@@ -74,10 +74,10 @@ class StatusTab(ctk.CTkFrame):
 
         # Grade de atributos
         attrs = [
-            ("\u2B50  Nivel",       str(p["level"])),
-            ("\u23F1  Stamina",     f"{p['stamina'] // 60}h {p['stamina'] % 60:02d}m"),
+            ("\u2B50  Nivel",          str(p["level"])),
+            ("\u23F1  Stamina",        f"{p['stamina'] // 60}h {p['stamina'] % 60:02d}m"),
             ("\U0001F4E6  Capacidade", f"{p['capacity'] / 100:.0f} oz"),
-            ("\U0001F4CD  Posicao",   f"X {p['x']}   Y {p['y']}   Z {p['z']}"),
+            ("\U0001F4CD  Posicao",    f"X {p['x']}   Y {p['y']}   Z {p['z']}"),
         ]
         for i, (lbl, val) in enumerate(attrs):
             row_bg = COLORS["bg_panel"] if i % 2 == 0 else "transparent"
@@ -91,9 +91,7 @@ class StatusTab(ctk.CTkFrame):
                          text_color=COLORS["text_label"], anchor="w").grid(
                 row=0, column=1, padx=(0, 12), pady=8, sticky="w")
 
-        # Espacamento inferior
-        ctk.CTkFrame(self._id_card, fg_color="transparent", height=12).grid(
-            row=20, column=0)
+        ctk.CTkFrame(self._id_card, fg_color="transparent", height=12).grid(row=20, column=0)
 
     # ------------------------------------------------------------------
     def _draw_vitals(self, p):
@@ -110,39 +108,24 @@ class StatusTab(ctk.CTkFrame):
         hp_pct   = max(0.0, min(1.0, p["hp"]   / max(p["hp_max"],   1)))
         mana_pct = max(0.0, min(1.0, p["mana"] / max(p["mana_max"], 1)))
 
-        # Bloco HP
         self._vital_block(
-            parent=self._vitals_card,
-            row=2,
-            icon="\u2764",
-            label="HP",
-            current=p["hp"],
-            maximum=p["hp_max"],
-            pct=hp_pct,
-            bar_color=COLORS["hp_red"],
-            bar_bg=COLORS["hp_bg"],
-            val_color=COLORS["hp_red"],
+            parent=self._vitals_card, row=2,
+            icon="\u2764", label="HP",
+            current=p["hp"], maximum=p["hp_max"], pct=hp_pct,
+            bar_color=COLORS["hp_red"], bar_bg=COLORS["hp_bg"], val_color=COLORS["hp_red"],
         )
 
         ctk.CTkFrame(self._vitals_card, fg_color=COLORS["border"], height=1).grid(
             row=3, column=0, sticky="ew", padx=20, pady=14)
 
-        # Bloco Mana
         self._vital_block(
-            parent=self._vitals_card,
-            row=4,
-            icon="\u26A1",
-            label="Mana",
-            current=p["mana"],
-            maximum=p["mana_max"],
-            pct=mana_pct,
-            bar_color=COLORS["mana_blue"],
-            bar_bg=COLORS["mana_bg"],
-            val_color=COLORS["mana_blue"],
+            parent=self._vitals_card, row=4,
+            icon="\u26A1", label="Mana",
+            current=p["mana"], maximum=p["mana_max"], pct=mana_pct,
+            bar_color=COLORS["mana_blue"], bar_bg=COLORS["mana_bg"], val_color=COLORS["mana_blue"],
         )
 
-        ctk.CTkFrame(self._vitals_card, fg_color="transparent", height=16).grid(
-            row=5, column=0)
+        ctk.CTkFrame(self._vitals_card, fg_color="transparent", height=16).grid(row=5, column=0)
 
     def _vital_block(self, parent, row, icon, label, current, maximum, pct,
                      bar_color, bar_bg, val_color):
@@ -150,12 +133,10 @@ class StatusTab(ctk.CTkFrame):
         block.grid(row=row, column=0, padx=20, pady=0, sticky="ew")
         block.grid_columnconfigure(1, weight=1)
 
-        # Icone
         ctk.CTkLabel(block, text=icon, font=("Segoe UI", 28),
                      text_color=val_color, width=44).grid(
             row=0, column=0, rowspan=2, padx=(0, 14), sticky="ns")
 
-        # Label + percentual
         lbl_frame = ctk.CTkFrame(block, fg_color="transparent")
         lbl_frame.grid(row=0, column=1, sticky="ew")
         lbl_frame.grid_columnconfigure(0, weight=1)
@@ -165,13 +146,11 @@ class StatusTab(ctk.CTkFrame):
                      font=("Segoe UI", 12, "bold"),
                      text_color=val_color).grid(row=0, column=1, sticky="e")
 
-        # Barra de progresso
         bar = ctk.CTkProgressBar(block, height=14, corner_radius=7,
                                   fg_color=bar_bg, progress_color=bar_color)
         bar.set(pct)
         bar.grid(row=1, column=1, pady=(6, 0), sticky="ew")
 
-        # Valor numerico
         ctk.CTkLabel(block,
                      text=f"{current:,} / {maximum:,}".replace(",", "."),
                      font=("Segoe UI", 20, "bold"),
