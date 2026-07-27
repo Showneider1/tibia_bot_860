@@ -4,6 +4,12 @@ Aba de Healing - configuracao de auto-heal conectada ao HealingScript.
 Conexao com o script:
     Todos os campos de entrada chamam _apply_to_script() ao perder foco
     ou ao pressionar Enter, atualizando config do HealingScript em tempo real.
+
+F1.5 — Fix: _get_script() agora usa engine.script_engine.get_script("HealingBot")
+em vez de buscar em engine.scripts / engine._scripts (atributos que nao existem
+no BotEngine atual). Metodo correto: ScriptEngine.get_script().
+
+F1.3 — _apply_to_script() aciona schedule_save() no ProfileManager quando disponivel.
 """
 import customtkinter as ctk
 from src.ui.theme import COLORS, FONTS
@@ -26,20 +32,20 @@ class HealingTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _get_script(self):
-        """Retorna a instancia de HealingScript do engine, ou None."""
+        """
+        Retorna a instancia de HealingScript do engine, ou None.
+
+        F1.5 FIX: usa engine.script_engine.get_script() — metodo oficial
+        do ScriptEngine — em vez de acessar engine.scripts / engine._scripts
+        que nao existem no BotEngine atual.
+        """
         engine = getattr(self.app, "bot_engine", None)
         if engine is None:
             return None
-        scripts = getattr(engine, "scripts", None) or getattr(engine, "_scripts", None)
-        if scripts is None:
+        script_engine = getattr(engine, "script_engine", None)
+        if script_engine is None:
             return None
-        # Suporta lista ou dict {name: script}
-        if isinstance(scripts, dict):
-            return scripts.get("HealingBot") or scripts.get("healing")
-        for s in scripts:
-            if getattr(s, "name", "") in ("HealingBot", "healing"):
-                return s
-        return None
+        return script_engine.get_script("HealingBot")
 
     def _apply_to_script(self, key: str, cast=str) -> None:
         """Sincroniza o campo 'key' com a config do HealingScript."""
@@ -52,8 +58,23 @@ class HealingTab(ctk.CTkFrame):
         try:
             value = cast(var.get())
             script.config[key] = value
+            # F1.3 — agenda save de perfil se ProfileManager disponivel
+            self._schedule_profile_save()
         except (ValueError, TypeError):
             pass  # valor invalido; nao altera o script
+
+    def _schedule_profile_save(self) -> None:
+        """Aciona debounce de save no ProfileManager, se disponivel."""
+        engine = getattr(self.app, "bot_engine", None)
+        if engine is None:
+            return
+        pm = getattr(engine, "_profile_manager", None)
+        if pm is None:
+            return
+        player = getattr(engine, "player", None)
+        if player is None:
+            return
+        pm.schedule_save(player.name, engine.script_engine)
 
     def _read_from_script(self) -> None:
         """Carrega os valores atuais do HealingScript nos campos da UI."""
@@ -207,6 +228,7 @@ class HealingTab(ctk.CTkFrame):
         script = self._get_script()
         if script:
             script.config[key] = var.get()
+            self._schedule_profile_save()
 
     def _card(self, row, col, title):
         card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=14,
