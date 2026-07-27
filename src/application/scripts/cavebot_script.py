@@ -16,6 +16,17 @@ BUG-C CORRIGIDO: max_distance_to_waypoint aumentado de 1 para 2.
 BUG-G CORRIGIDO: _move_player() e _move_towards() usam
   bot_engine.injector (property publica) ao inves de
   bot_engine._injector (atributo privado).
+
+BUG-STUCK CORRIGIDO: _last_move_time=0 fazia anti-stuck disparar
+  imediatamente no primeiro tick (time.time()-0 >> stuck_timeout).
+  on_enable() agora inicializa _last_move_time = time.time().
+
+BUG-INDEX CORRIGIDO: _current_waypoint_index nao era resetado ao
+  reativar o cavebot. on_enable() agora reseta indice, path e contadores.
+
+BUG-POS CORRIGIDO: _execute_waypoints agora valida se player.position
+  e valida (x>0, y>0) antes de calcular distancia. Posicao (0,0,0) indica
+  que a leitura de memoria ainda nao sincronizou; o tick e pulado.
 """
 import time
 import win32con
@@ -61,11 +72,46 @@ class CavebotScript(BaseScript):
         self._current_waypoint_index = 0
         self._stuck_counter = 0
         self._last_position: Optional[Position] = None
-        self._last_move_time = 0
+        # BUG-STUCK FIX: inicializado com time.time() no on_enable(),
+        # nao com 0. Valor 0 faz time.time()-0 >> stuck_timeout no 1o tick.
+        self._last_move_time = 0.0
         self._pathfinder = Pathfinder()
         self._current_path: List[Position] = []
         self._follow_target: Optional[Creature] = None
         self._last_follow_position: Optional[Position] = None
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida
+    # ------------------------------------------------------------------
+
+    def on_enable(self) -> None:
+        """
+        BUG-STUCK FIX: inicializa _last_move_time com o tempo atual.
+        BUG-INDEX FIX: reseta indice, path e contadores ao ativar.
+
+        Sem esses resets:
+          1. anti-stuck dispara no primeiro tick (time.time()-0 >> 8s)
+          2. indice pode apontar alem do fim da lista se o usuario
+             desativou/reativou o cavebot com waypoints diferentes.
+        """
+        self._last_move_time = time.time()
+        self._current_waypoint_index = 0
+        self._current_path = []
+        self._stuck_counter = 0
+        self._last_position = None
+        self._follow_target = None
+        self._last_follow_position = None
+        self._log.info("CaveBot ativado — contadores resetados.")
+
+    def on_disable(self) -> None:
+        """Limpa estado ao desativar."""
+        self._current_path = []
+        self._follow_target = None
+        self._log.info("CaveBot desativado.")
+
+    # ------------------------------------------------------------------
+    # Execucao principal
+    # ------------------------------------------------------------------
 
     def execute(self, context: Dict[str, Any]) -> bool:
         player: Player = context.get("player")
@@ -131,12 +177,28 @@ class CavebotScript(BaseScript):
         if not waypoints:
             return False
 
+        # BUG-POS FIX: valida posicao do player antes de qualquer calculo.
+        # Posicao (0,0,0) indica que a leitura de memoria ainda nao sincronizou
+        # (PlayerReader retornou fallback ou BattleList nao achou o player ainda).
+        # Pular o tick e mais seguro do que calcular distancia errada.
+        if player.position.x <= 0 or player.position.y <= 0:
+            self._log.debug("CaveBot: posicao do player invalida (0,0,0), aguardando sincronizacao...")
+            return False
+
+        # BUG-INDEX FIX: garante que o indice esta dentro dos limites.
+        # Pode ficar fora dos limites se waypoints foram modificados enquanto
+        # o cavebot estava ativo.
+        if self._current_waypoint_index >= len(waypoints):
+            self._current_waypoint_index = 0
+            self._current_path = []
+            self._log.debug("CaveBot: indice fora do limite, voltando ao waypoint 0.")
+
         current_wp = waypoints[self._current_waypoint_index]
         distance = player.position.distance_chebyshev(current_wp.position)
 
         # BUG-C FIX: tolerancia 2 sqm (era 1)
         if distance <= self.config["max_distance_to_waypoint"]:
-            self._log.info(f"Waypoint {self._current_waypoint_index} alcancado!")
+            self._log.info(f"Waypoint {self._current_waypoint_index} alcancado! ({current_wp.position.x},{current_wp.position.y},{current_wp.position.z})")
             self._execute_waypoint_action(current_wp, bot_engine)
             self._next_waypoint(len(waypoints))
             self._current_path = []
@@ -216,9 +278,9 @@ class CavebotScript(BaseScript):
                 target_pos
             )
             if not self._current_path:
-                self._log.warning("Pathfinding falhou! Rota bloqueada.")
-                return False
-            self._log.info(f"Path calculado: {len(self._current_path)} passos")
+                self._log.warning("Pathfinding falhou! Tentando movimento direto...")
+                return self._move_towards(player, target_pos, bot_engine)
+            self._log.info(f"Path calculado: {len(self._current_path)} passos ate ({target_pos.x},{target_pos.y},{target_pos.z})")
 
         current_index = self._find_nearest_index(player.position)
         if current_index == -1:
@@ -253,11 +315,12 @@ class CavebotScript(BaseScript):
 
         vk_code = self._direction_to_key(dx, dy)
         if vk_code:
-            self._log.debug(f"Andando para X:{next_step.x} Y:{next_step.y}")
+            self._log.debug(f"Andando: ({current_pos.x},{current_pos.y}) -> ({next_step.x},{next_step.y}) dx={dx} dy={dy}")
             bot_engine.injector.send_key_background(vk_code)
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
             return True
+        self._log.warning(f"Direcao invalida: dx={dx} dy={dy}")
         return False
 
     def _move_towards(self, player: Player, target: Position, bot_engine: Any) -> bool:
@@ -270,6 +333,7 @@ class CavebotScript(BaseScript):
 
         vk_code = self._direction_to_key(dx, dy)
         if vk_code:
+            self._log.debug(f"Movimento direto: dx={dx} dy={dy} -> ({target.x},{target.y})")
             bot_engine.injector.send_key_background(vk_code)
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
@@ -294,6 +358,9 @@ class CavebotScript(BaseScript):
 
     def _is_stuck(self, player: Player) -> bool:
         """Detecta se o player esta stuck (nao esta se movendo)."""
+        # BUG-STUCK FIX: _last_move_time e inicializado com time.time() no
+        # on_enable(), entao essa condicao so dispara apos stuck_timeout
+        # segundos SEM nenhum movimento — comportamento correto.
         if time.time() - self._last_move_time < self.config["stuck_timeout"]:
             return False
 
