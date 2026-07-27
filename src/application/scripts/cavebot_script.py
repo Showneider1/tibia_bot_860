@@ -1,6 +1,17 @@
 """
 Script de navegacao automatica com A* pathfinding, follow system e anti-stuck.
 Inspirado em ElfBot/XenoBot cavebot robusto.
+
+BUG-B CORRIGIDO: _navigate_with_pathfinding() nao mais usa
+  'player.position not in self._current_path' nem '.index()'.
+  Posicao lida da memoria tem jitter de +-1 sqm e raramente coincide
+  exatamente com no do path, causando reset do path a cada tick e
+  impedindo qualquer avanco. Novo _find_nearest_index() usa distancia
+  Chebyshev (tolerancia <= 1 sqm) para localizar no mais proximo.
+
+BUG-C CORRIGIDO: max_distance_to_waypoint aumentado de 1 para 2.
+  Tolerancia 1 nunca era atingida por jitter de posicao.
+  Valor 2 e padrao seguro para Tibia 8.60. Configuravel.
 """
 import time
 import win32con
@@ -22,7 +33,8 @@ class CavebotScript(BaseScript):
         self.config = {
             "waypoints": [],
             "loop": True,
-            "max_distance_to_waypoint": 1,
+            # BUG-C FIX: era 1, aumentado para 2 para absorver jitter de leitura
+            "max_distance_to_waypoint": 2,
             "use_pathfinding": True,
 
             # Anti-stuck system
@@ -52,9 +64,6 @@ class CavebotScript(BaseScript):
         self._last_follow_position: Optional[Position] = None
 
     def execute(self, context: Dict[str, Any]) -> bool:
-        # BUG 2 CORRIGIDO: removida checagem de self.config["enabled"] que nunca
-        # era setado. O controle de ativacao e feito via self.enabled (BaseScript),
-        # que o ScriptEngine ja checa antes de chamar execute().
         player: Player = context.get("player")
         creatures: List[Creature] = context.get("creatures", [])
         bot_engine = context.get("bot_engine")
@@ -62,12 +71,14 @@ class CavebotScript(BaseScript):
         if not player or not bot_engine:
             return False
 
-        # Modo follow tem prioridade sobre waypoints
         if self.config["enable_follow"]:
             return self._execute_follow(player, creatures, bot_engine)
 
-        # Modo waypoint normal
         return self._execute_waypoints(player, creatures, bot_engine)
+
+    # ------------------------------------------------------------------
+    # Modo Follow
+    # ------------------------------------------------------------------
 
     def _execute_follow(self, player: Player, creatures: List[Creature], bot_engine) -> bool:
         """Executa modo follow (seguir um player)."""
@@ -92,20 +103,23 @@ class CavebotScript(BaseScript):
             return False
 
         self._last_follow_position = target_pos
-
         distance = player.position.distance_chebyshev(target_pos)
-        follow_distance = self.config["follow_distance"]
 
-        if distance <= follow_distance:
+        if distance <= self.config["follow_distance"]:
             return False
 
         if distance > self.config["follow_max_distance"]:
             self._log.warning(f"Follow target muito longe ({distance} sqm), recalculando...")
 
         if self.config["use_pathfinding"]:
-            return self._navigate_with_pathfinding(player, target_pos, bot_engine,
-                                                   target_is_creature=True)
+            return self._navigate_with_pathfinding(
+                player, target_pos, bot_engine, target_is_creature=True
+            )
         return self._move_towards(player, target_pos, bot_engine)
+
+    # ------------------------------------------------------------------
+    # Modo Waypoint
+    # ------------------------------------------------------------------
 
     def _execute_waypoints(self, player: Player, creatures: List[Creature], bot_engine) -> bool:
         """Executa navegacao por waypoints."""
@@ -116,6 +130,7 @@ class CavebotScript(BaseScript):
         current_wp = waypoints[self._current_waypoint_index]
         distance = player.position.distance_chebyshev(current_wp.position)
 
+        # BUG-C FIX: tolerancia 2 sqm (era 1)
         if distance <= self.config["max_distance_to_waypoint"]:
             self._log.info(f"Waypoint {self._current_waypoint_index} alcancado!")
             self._execute_waypoint_action(current_wp, bot_engine)
@@ -138,31 +153,82 @@ class CavebotScript(BaseScript):
 
         return self._move_towards(player, current_wp.position, bot_engine)
 
-    def _navigate_with_pathfinding(self, player: Player, target_pos: Position,
-                                   bot_engine: Any, target_is_creature: bool = False) -> bool:
-        """Navega usando A* e envia as teclas de movimento em background."""
-        if (not self._current_path or
-                player.position not in self._current_path or
-                (target_is_creature and self._path_needs_recalc(player, target_pos))):
+    # ------------------------------------------------------------------
+    # Navegacao com A*
+    # ------------------------------------------------------------------
+
+    def _find_nearest_index(self, player_pos: Position) -> int:
+        """
+        BUG-B FIX: substitui 'self._current_path.index(player.position)'.
+
+        Localiza o indice do no do path mais proximo da posicao atual
+        usando distancia Chebyshev. Tolerancia de 1 sqm para absorver
+        o jitter da leitura de memoria do Tibia.
+
+        Returns:
+            Indice do no mais proximo, ou -1 se todos estiverem > 1 sqm.
+        """
+        best_idx  = -1
+        best_dist = 9999
+        for i, pos in enumerate(self._current_path):
+            d = player_pos.distance_chebyshev(pos)
+            if d < best_dist:
+                best_dist = d
+                best_idx  = i
+        return best_idx if best_dist <= 1 else -1
+
+    def _navigate_with_pathfinding(
+        self,
+        player: Player,
+        target_pos: Position,
+        bot_engine: Any,
+        target_is_creature: bool = False
+    ) -> bool:
+        """
+        Navega usando A* e envia as teclas de movimento em background.
+
+        BUG-B FIX:
+          ANTES (quebrado):
+            if player.position not in self._current_path:  # sempre True por jitter
+                recalcula path
+            current_index = self._current_path.index(player.position)  # ValueError
+
+          AGORA (correto):
+            Usa _find_nearest_index() com tolerancia Chebyshev <= 1 sqm.
+            Path so e recalculado se:
+              1. Nao ha path ativo
+              2. Player saiu da tolerancia de todos os nos
+              3. Alvo se moveu (modo follow)
+        """
+        needs_recalc = (
+            not self._current_path
+            or self._find_nearest_index(player.position) == -1
+            or (target_is_creature and self._path_needs_recalc(player, target_pos))
+        )
+
+        if needs_recalc:
             self._current_path = self._pathfinder.find_path(
                 player.position,
                 target_pos
             )
-
             if not self._current_path:
                 self._log.warning("Pathfinding falhou! Rota bloqueada.")
                 return False
-
             self._log.info(f"Path calculado: {len(self._current_path)} passos")
 
-        try:
-            current_index = self._current_path.index(player.position)
-            if current_index + 1 < len(self._current_path):
-                next_step = self._current_path[current_index + 1]
-                return self._move_player(player.position, next_step, bot_engine)
-        except ValueError:
+        current_index = self._find_nearest_index(player.position)
+        if current_index == -1:
+            # Pos fora do path apos recalculo - nao deve ocorrer
             self._current_path = []
+            return False
 
+        next_index = current_index + 1
+        if next_index < len(self._current_path):
+            next_step = self._current_path[next_index]
+            return self._move_player(player.position, next_step, bot_engine)
+
+        # Player ja esta no ultimo no do path
+        self._current_path = []
         return False
 
     def _path_needs_recalc(self, player: Player, target_pos: Position) -> bool:
@@ -172,29 +238,28 @@ class CavebotScript(BaseScript):
         last_pos = self._current_path[-1]
         return last_pos.distance_chebyshev(target_pos) > 2
 
+    # ------------------------------------------------------------------
+    # Movimento
+    # ------------------------------------------------------------------
+
     def _move_player(self, current_pos: Position, next_step: Position, bot_engine: Any) -> bool:
         """Move player de current_pos para next_step enviando tecla apropriada."""
         dx = next_step.x - current_pos.x
         dy = next_step.y - current_pos.y
 
         vk_code = self._direction_to_key(dx, dy)
-
         if vk_code:
             self._log.debug(f"Andando para X:{next_step.x} Y:{next_step.y}")
             bot_engine._injector.send_key_background(vk_code)
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
             return True
-
         return False
 
     def _move_towards(self, player: Player, target: Position, bot_engine: Any) -> bool:
         """Movimento direto sem pathfinding (fallback)."""
-        dx = target.x - player.position.x
-        dy = target.y - player.position.y
-
-        dx = max(-1, min(1, dx))
-        dy = max(-1, min(1, dy))
+        dx = max(-1, min(1, target.x - player.position.x))
+        dy = max(-1, min(1, target.y - player.position.y))
 
         if dx == 0 and dy == 0:
             return False
@@ -205,7 +270,6 @@ class CavebotScript(BaseScript):
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
             return True
-
         return False
 
     def _direction_to_key(self, dx: int, dy: int) -> Optional[int]:
@@ -220,6 +284,10 @@ class CavebotScript(BaseScript):
         elif dx == -1 and dy ==  1: return win32con.VK_NUMPAD1
         return None
 
+    # ------------------------------------------------------------------
+    # Anti-stuck
+    # ------------------------------------------------------------------
+
     def _is_stuck(self, player: Player) -> bool:
         """Detecta se o player esta stuck (nao esta se movendo)."""
         if time.time() - self._last_move_time < self.config["stuck_timeout"]:
@@ -227,7 +295,9 @@ class CavebotScript(BaseScript):
 
         if self._last_position and self._last_position == player.position:
             self._stuck_counter += 1
-            self._log.warning(f"Stuck detectado! Tentativa {self._stuck_counter}/{self.config['stuck_retries']}")
+            self._log.warning(
+                f"Stuck detectado! Tentativa {self._stuck_counter}/{self.config['stuck_retries']}"
+            )
             return True
 
         self._last_position = player.position
@@ -245,8 +315,13 @@ class CavebotScript(BaseScript):
             self._current_path = []
             self._last_move_time = time.time()
 
-    def _is_path_dangerous(self, player: Player, target: Position,
-                           creatures: List[Creature]) -> bool:
+    # ------------------------------------------------------------------
+    # Perigos
+    # ------------------------------------------------------------------
+
+    def _is_path_dangerous(
+        self, player: Player, target: Position, creatures: List[Creature]
+    ) -> bool:
         """Verifica se ha criaturas perigosas no caminho."""
         dangerous = self.config.get("dangerous_creatures", [])
         if not dangerous:
@@ -258,25 +333,33 @@ class CavebotScript(BaseScript):
                 dist_to_target = target.distance_chebyshev(creature.position)
                 if dist_to_player <= 5 and dist_to_target <= 5:
                     return True
-
         return False
+
+    # ------------------------------------------------------------------
+    # Acoes de waypoint
+    # ------------------------------------------------------------------
 
     def _execute_waypoint_action(self, waypoint: Waypoint, bot_engine: Any) -> None:
         """Executa acao associada a um waypoint."""
-        if hasattr(waypoint, "action") and waypoint.action:
-            action = waypoint.action.lower()
+        if not hasattr(waypoint, "action") or not waypoint.action:
+            return
+        action = waypoint.action.lower()
 
-            if action == "deposit":
-                self._log.info("Depositando items no depot...")
-            elif action == "refuel":
-                self._log.info("Reabastecendo supplies...")
-            elif action == "wait":
-                self._log.info("Aguardando no waypoint...")
-                time.sleep(2)
-            elif action.startswith("say:"):
-                msg = action.split(":", 1)[1]
-                bot_engine._injector.cast_spell(msg)
-                self._log.info(f"Dizendo: {msg}")
+        if action == "deposit":
+            self._log.info("Depositando items no depot...")
+        elif action == "refuel":
+            self._log.info("Reabastecendo supplies...")
+        elif action == "wait":
+            self._log.info("Aguardando no waypoint...")
+            time.sleep(2)
+        elif action.startswith("say:"):
+            msg = action.split(":", 1)[1]
+            bot_engine._injector.cast_spell(msg)
+            self._log.info(f"Dizendo: {msg}")
+
+    # ------------------------------------------------------------------
+    # Controle de indice
+    # ------------------------------------------------------------------
 
     def _next_waypoint(self, total: int) -> None:
         """Avanca para proximo waypoint."""
@@ -289,7 +372,9 @@ class CavebotScript(BaseScript):
                 self._current_waypoint_index = total - 1
                 self._log.info("Cavebot finalizado.")
 
-    # === API publica ===
+    # ------------------------------------------------------------------
+    # API publica
+    # ------------------------------------------------------------------
 
     def add_waypoint(self, waypoint: Waypoint) -> None:
         """Adiciona waypoint a rota."""
