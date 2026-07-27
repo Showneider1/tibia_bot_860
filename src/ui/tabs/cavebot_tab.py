@@ -1,9 +1,13 @@
 """
 Aba de Cavebot - waypoints e configuracoes de hunt conectados ao CavebotScript.
 
+Formas de adicionar waypoint (estilo ElfBot/WindBot):
+    1. Posicao atual: botoes que pegam a posicao do player no momento
+       com offset direcional (mesmo SQM, Norte, Sul, Leste, Oeste, diagonais)
+    2. Manual: campos X/Y/Z/Acao para digitar a posicao desejada
+
 Funcionalidades:
-    - Adicionar / remover / listar waypoints
-    - Salvar waypoints em arquivo .json  (estilo ElfBot/WindBot)
+    - Salvar waypoints em arquivo .json
     - Carregar waypoints de arquivo .json
     - Switches de opcoes aplicados em tempo real ao CavebotScript
 
@@ -16,13 +20,21 @@ Formato do arquivo de waypoints salvo:
 import json
 import os
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 from src.ui.theme import COLORS, FONTS
 from src.core.entities.waypoint import Waypoint
 from src.core.value_objects.position import Position
 
 # Pasta padrao onde os perfis de waypoint sao salvos
 DEFAULT_WP_DIR = os.path.join(os.path.expanduser("~"), "tibia_bot_waypoints")
+
+# Offsets direcionais exatamente como ElfBot/WindBot
+# (dx, dy)  -- no Tibia: Y sobe indo para Norte (Y-1)
+DIRECTIONS = [
+    ("NW",   -1, -1), ("N",   0, -1), ("NE",  +1, -1),
+    ("W",    -1,  0), ("Aqui", 0,  0), ("E",  +1,  0),
+    ("SW",   -1, +1), ("S",   0, +1), ("SE",  +1, +1),
+]
 
 
 class CavebotTab(ctk.CTkFrame):
@@ -33,41 +45,42 @@ class CavebotTab(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        # variaveis dos campos de adicionar waypoint
+        # variaveis da aba manual
         self._var_x      = ctk.StringVar(value="")
         self._var_y      = ctk.StringVar(value="")
         self._var_z      = ctk.StringVar(value="7")
         self._var_action = ctk.StringVar(value="walk")
 
+        # label de posicao atual
+        self._var_pos_label  = ctk.StringVar(value="Posicao atual: desconhecida")
+        self._var_action_pos = ctk.StringVar(value="walk")
+
         # nome do perfil carregado
         self._var_profile = ctk.StringVar(value="sem perfil")
 
-        # referencias aos switches de opcoes
+        # referencias
         self._opt_vars: dict = {}
-
-        # referencia ao frame scrollavel de waypoints
         self._wp_scroll = None
 
         os.makedirs(DEFAULT_WP_DIR, exist_ok=True)
         self._build()
 
+        # atualiza posicao a cada 1s
+        self._update_pos_label()
+
     # ------------------------------------------------------------------
-    # Acesso ao CavebotScript via BotEngine
+    # Acesso ao engine
     # ------------------------------------------------------------------
 
     def _get_script(self):
-        """Retorna a instancia de CavebotScript do engine, ou None."""
         engine = getattr(self.app, "bot_engine", None)
         if engine is None:
             return None
-        # Busca no script_engine (caminho correto)
         se = getattr(engine, "script_engine", None)
         if se is not None:
-            scripts = getattr(se, "_scripts", [])
-            for s in scripts:
+            for s in getattr(se, "_scripts", []):
                 if getattr(s, "name", "") in ("CaveBot", "cavebot", "Cavebot"):
                     return s
-        # Fallback: busca direta em engine.scripts / engine._scripts
         scripts = getattr(engine, "scripts", None) or getattr(engine, "_scripts", None)
         if scripts is None:
             return None
@@ -78,17 +91,62 @@ class CavebotTab(ctk.CTkFrame):
                 return s
         return None
 
-    def _apply_bool(self, cfg_key: str, var: ctk.BooleanVar) -> None:
+    def _get_player_pos(self):
+        """Retorna Position atual do player, ou None."""
+        try:
+            engine = getattr(self.app, "bot_engine", None)
+            if engine is None:
+                return None
+            player = getattr(engine, "player", None) or getattr(engine, "_player", None)
+            if player is None:
+                return None
+            pos = getattr(player, "position", None)
+            if pos and pos.x > 0 and pos.y > 0:
+                return pos
+        except Exception:
+            pass
+        return None
+
+    def _update_pos_label(self):
+        """Atualiza o label com a posicao atual do player a cada 1s."""
+        pos = self._get_player_pos()
+        if pos:
+            self._var_pos_label.set(f"Posicao atual:  X={pos.x}  Y={pos.y}  Z={pos.z}")
+        else:
+            self._var_pos_label.set("Posicao atual: aguardando conexao...")
+        self.after(1000, self._update_pos_label)
+
+    def _apply_bool(self, cfg_key, var):
         script = self._get_script()
         if script:
             script.config[cfg_key] = var.get()
 
     # ------------------------------------------------------------------
-    # Acoes de waypoint - CRUD
+    # Adicionar waypoint - FORMA 1: posicao atual + direcao
     # ------------------------------------------------------------------
 
-    def _add_waypoint(self) -> None:
-        """Le os campos X/Y/Z/Acao e adiciona waypoint ao script."""
+    def _add_by_position(self, dx: int, dy: int) -> None:
+        """Pega a posicao atual do player, aplica offset e adiciona waypoint."""
+        pos = self._get_player_pos()
+        if pos is None:
+            self.app.log(
+                "Cavebot: nao foi possivel obter a posicao atual. Bot conectado?",
+                COLORS["warn_yellow"],
+            )
+            return
+
+        x = pos.x + dx
+        y = pos.y + dy
+        z = pos.z
+        action = self._var_action_pos.get().strip() or "walk"
+
+        self._do_add(x, y, z, action)
+
+    # ------------------------------------------------------------------
+    # Adicionar waypoint - FORMA 2: entrada manual
+    # ------------------------------------------------------------------
+
+    def _add_manual(self) -> None:
         x_raw = self._var_x.get().strip()
         y_raw = self._var_y.get().strip()
         z_raw = self._var_z.get().strip()
@@ -98,32 +156,37 @@ class CavebotTab(ctk.CTkFrame):
             return
 
         try:
-            x = int(x_raw)
-            y = int(y_raw)
-            z = int(z_raw)
+            x, y, z = int(x_raw), int(y_raw), int(z_raw)
         except ValueError:
             self.app.log("Cavebot: X, Y e Z precisam ser numeros inteiros.", COLORS["warn_yellow"])
             return
 
         action = self._var_action.get().strip() or "walk"
-        wp     = Waypoint(position=Position(x=x, y=y, z=z), action=action)
+        self._do_add(x, y, z, action)
+        self._var_x.set("")
+        self._var_y.set("")
 
+    # ------------------------------------------------------------------
+    # Core: efetivamente insere o waypoint
+    # ------------------------------------------------------------------
+
+    def _do_add(self, x: int, y: int, z: int, action: str) -> None:
+        wp = Waypoint(position=Position(x=x, y=y, z=z), action=action)
         script = self._get_script()
         if script:
             script.add_waypoint(wp)
             self.app.log(f"Waypoint adicionado: ({x}, {y}, {z}) [{action}]", COLORS["online_green"])
         else:
-            # Modo demo: armazena na lista local para poder salvar mesmo sem engine
             self._demo_waypoints = getattr(self, "_demo_waypoints", [])
             self._demo_waypoints.append(wp)
             self.app.log(f"[DEMO] Waypoint ({x}, {y}, {z}) [{action}] registrado.", COLORS["text_faint"])
-
-        self._var_x.set("")
-        self._var_y.set("")
         self._refresh_waypoints()
 
+    # ------------------------------------------------------------------
+    # Limpar
+    # ------------------------------------------------------------------
+
     def _clear_waypoints(self) -> None:
-        """Remove todos os waypoints do script."""
         script = self._get_script()
         if script:
             script.clear_waypoints()
@@ -134,7 +197,6 @@ class CavebotTab(ctk.CTkFrame):
         self._refresh_waypoints()
 
     def _get_current_waypoints(self) -> list:
-        """Retorna a lista de Waypoint ativos (engine ou demo)."""
         script = self._get_script()
         if script:
             return script.config.get("waypoints", [])
@@ -145,21 +207,17 @@ class CavebotTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _save_waypoints(self) -> None:
-        """Salva os waypoints atuais em um arquivo .json escolhido pelo usuario."""
         waypoints = self._get_current_waypoints()
         if not waypoints:
             self.app.log("Cavebot: nenhum waypoint para salvar.", COLORS["warn_yellow"])
             return
-
         filepath = filedialog.asksaveasfilename(
-            initialdir=DEFAULT_WP_DIR,
-            title="Salvar waypoints",
+            initialdir=DEFAULT_WP_DIR, title="Salvar waypoints",
             defaultextension=".json",
             filetypes=[("Waypoint JSON", "*.json"), ("Todos", "*.*")],
         )
         if not filepath:
             return
-
         data = [
             {"x": wp.position.x, "y": wp.position.y,
              "z": wp.position.z, "action": wp.action}
@@ -168,53 +226,38 @@ class CavebotTab(ctk.CTkFrame):
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            profile_name = os.path.splitext(os.path.basename(filepath))[0]
-            self._var_profile.set(profile_name)
-            self.app.log(
-                f"Waypoints salvos: '{profile_name}' ({len(data)} pontos)",
-                COLORS["online_green"],
-            )
+            name = os.path.splitext(os.path.basename(filepath))[0]
+            self._var_profile.set(name)
+            self.app.log(f"Waypoints salvos: '{name}' ({len(data)} pontos)", COLORS["online_green"])
         except Exception as e:
             self.app.log(f"Erro ao salvar waypoints: {e}", COLORS["hp_red"])
 
     def _load_waypoints(self) -> None:
-        """Carrega waypoints de um arquivo .json escolhido pelo usuario."""
         filepath = filedialog.askopenfilename(
-            initialdir=DEFAULT_WP_DIR,
-            title="Carregar waypoints",
+            initialdir=DEFAULT_WP_DIR, title="Carregar waypoints",
             filetypes=[("Waypoint JSON", "*.json"), ("Todos", "*.*")],
         )
         if not filepath:
             return
-
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
             self.app.log(f"Erro ao abrir arquivo: {e}", COLORS["hp_red"])
             return
-
         if not isinstance(data, list):
             self.app.log("Arquivo invalido: esperado uma lista de waypoints.", COLORS["hp_red"])
             return
-
-        # Limpa os waypoints atuais
         script = self._get_script()
         if script:
             script.clear_waypoints()
         if hasattr(self, "_demo_waypoints"):
             self._demo_waypoints.clear()
-
-        loaded = 0
-        errors = 0
+        loaded = errors = 0
         for item in data:
             try:
                 wp = Waypoint(
-                    position=Position(
-                        x=int(item["x"]),
-                        y=int(item["y"]),
-                        z=int(item["z"]),
-                    ),
+                    position=Position(x=int(item["x"]), y=int(item["y"]), z=int(item["z"])),
                     action=str(item.get("action", "walk")),
                 )
                 if script:
@@ -225,40 +268,31 @@ class CavebotTab(ctk.CTkFrame):
                 loaded += 1
             except (KeyError, ValueError, TypeError):
                 errors += 1
-
-        profile_name = os.path.splitext(os.path.basename(filepath))[0]
-        self._var_profile.set(profile_name)
-
-        msg = f"Perfil '{profile_name}' carregado: {loaded} waypoints"
+        name = os.path.splitext(os.path.basename(filepath))[0]
+        self._var_profile.set(name)
+        msg = f"Perfil '{name}' carregado: {loaded} waypoints"
         if errors:
             msg += f" ({errors} erro(s) ignorados)"
         self.app.log(msg, COLORS["online_green"])
         self._refresh_waypoints()
 
     # ------------------------------------------------------------------
-    # Refresh da lista de waypoints
+    # Refresh da lista
     # ------------------------------------------------------------------
 
     def _refresh_waypoints(self) -> None:
-        """Atualiza a lista de waypoints exibida na UI."""
         if self._wp_scroll is None:
             return
-
         for w in self._wp_scroll.winfo_children():
             w.destroy()
-
         waypoints = self._get_current_waypoints()
-        widths    = [30, 70, 70, 40, 80]
-
+        widths = [30, 70, 70, 40, 80]
         if not waypoints:
             ctk.CTkLabel(
-                self._wp_scroll,
-                text="Nenhum waypoint cadastrado.",
-                font=FONTS["small"],
-                text_color=COLORS["text_faint"],
+                self._wp_scroll, text="Nenhum waypoint cadastrado.",
+                font=FONTS["small"], text_color=COLORS["text_faint"],
             ).pack(pady=16)
             return
-
         for idx, wp in enumerate(waypoints, start=1):
             p    = wp.position
             vals = (str(idx), str(p.x), str(p.y), str(p.z), wp.action)
@@ -282,7 +316,6 @@ class CavebotTab(ctk.CTkFrame):
         ctk.CTkLabel(self, text="Gerencie waypoints e comportamento do bot em cave",
                      font=FONTS["small"], text_color=COLORS["text_faint"]).grid(
             row=1, column=0, columnspan=2, padx=24, pady=(0, 16), sticky="w")
-
         self._waypoint_panel()
         self._config_panel()
 
@@ -291,90 +324,156 @@ class CavebotTab(ctk.CTkFrame):
                             border_width=1, border_color=COLORS["border"])
         card.grid(row=2, column=0, padx=(24, 8), pady=(0, 24), sticky="nsew")
         card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(4, weight=1)
+        card.grid_rowconfigure(6, weight=1)
 
-        # --- Header com botoes CRUD ---
+        # ---- Header toolbar ----
         hdr = ctk.CTkFrame(card, fg_color="transparent")
         hdr.grid(row=0, column=0, padx=16, pady=(14, 4), sticky="ew")
         hdr.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(hdr, text="WAYPOINTS", font=FONTS["badge"],
                      text_color=COLORS["accent_light"]).grid(row=0, column=0, sticky="w")
-
         btn_frame = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_frame.grid(row=0, column=1)
         ctk.CTkButton(
-            btn_frame, text="+ Adicionar", font=FONTS["small"], height=28,
-            corner_radius=8, fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            command=self._add_waypoint,
-        ).pack(side="left", padx=3)
-        ctk.CTkButton(
             btn_frame, text="Limpar", font=FONTS["small"], height=28,
-            corner_radius=8, fg_color=COLORS["hp_red"],
-            hover_color="#c04040",
+            corner_radius=8, fg_color=COLORS["hp_red"], hover_color="#c04040",
             command=self._clear_waypoints,
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             btn_frame, text="↺", font=FONTS["small"], height=28, width=36,
             corner_radius=8, fg_color=COLORS["bg_panel"],
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["text_label"],
+            hover_color=COLORS["bg_hover"], text_color=COLORS["text_label"],
             command=self._refresh_waypoints,
         ).pack(side="left", padx=3)
 
-        # --- Barra Save / Load  (estilo ElfBot/WindBot) ---
+        # ---- Save / Load ----
         io_bar = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=8)
         io_bar.grid(row=1, column=0, padx=12, pady=(0, 6), sticky="ew")
-        io_bar.grid_columnconfigure(1, weight=1)
-
+        io_bar.grid_columnconfigure(2, weight=1)
         ctk.CTkButton(
             io_bar, text="💾  Salvar", font=FONTS["small"], height=28,
-            corner_radius=8, fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
+            corner_radius=8, fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
             command=self._save_waypoints,
         ).grid(row=0, column=0, padx=(8, 4), pady=6)
         ctk.CTkButton(
             io_bar, text="📂  Carregar", font=FONTS["small"], height=28,
-            corner_radius=8, fg_color=COLORS["bg_input"],
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["text_label"],
-            border_width=1, border_color=COLORS["border"],
+            corner_radius=8, fg_color=COLORS["bg_input"], hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_label"], border_width=1, border_color=COLORS["border"],
             command=self._load_waypoints,
-        ).grid(row=0, column=1, padx=(0, 8), pady=6, sticky="w")
+        ).grid(row=0, column=1, padx=(0, 8), pady=6)
         ctk.CTkLabel(
             io_bar, textvariable=self._var_profile,
             font=FONTS["small"], text_color=COLORS["text_faint"],
         ).grid(row=0, column=2, padx=(0, 12), pady=6, sticky="e")
 
-        # --- Linha de adicao rapida ---
-        add_row = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=8)
-        add_row.grid(row=2, column=0, padx=12, pady=(0, 6), sticky="ew")
+        # ==================================================================
+        # FORMA 1: Posicao Atual  (estilo ElfBot/WindBot)
+        # ==================================================================
+        sec1 = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=10)
+        sec1.grid(row=2, column=0, padx=12, pady=(0, 6), sticky="ew")
+        sec1.grid_columnconfigure(0, weight=1)
+
+        # Header da secao
+        hdr1 = ctk.CTkFrame(sec1, fg_color="transparent")
+        hdr1.grid(row=0, column=0, padx=8, pady=(8, 2), sticky="ew")
+        hdr1.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            hdr1, text="Posicao Atual", font=FONTS["badge"],
+            text_color=COLORS["accent_light"],
+        ).grid(row=0, column=0, sticky="w")
+        # Label de coordenadas ao vivo
+        ctk.CTkLabel(
+            hdr1, textvariable=self._var_pos_label,
+            font=FONTS["small"], text_color=COLORS["text_faint"],
+        ).grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        # Grid de direcoes 3x3 (NW/N/NE / W/Aqui/E / SW/S/SE)
+        dir_grid = ctk.CTkFrame(sec1, fg_color="transparent")
+        dir_grid.grid(row=1, column=0, padx=8, pady=(4, 4))
+
+        for i, (label, dx, dy) in enumerate(DIRECTIONS):
+            row_i = i // 3
+            col_i = i % 3
+            is_center = (label == "Aqui")
+            ctk.CTkButton(
+                dir_grid,
+                text=label,
+                width=56, height=34,
+                font=FONTS["small"],
+                corner_radius=8,
+                fg_color=COLORS["accent"] if is_center else COLORS["bg_input"],
+                hover_color=COLORS["accent_hover"] if is_center else COLORS["bg_hover"],
+                text_color=COLORS["text_inverse"] if is_center else COLORS["text_label"],
+                border_width=0 if is_center else 1,
+                border_color=COLORS["border"],
+                command=lambda dx=dx, dy=dy: self._add_by_position(dx, dy),
+            ).grid(row=row_i, column=col_i, padx=3, pady=3)
+
+        # Acao para o modo posicao atual
+        act_row1 = ctk.CTkFrame(sec1, fg_color="transparent")
+        act_row1.grid(row=2, column=0, padx=8, pady=(0, 8), sticky="w")
+        ctk.CTkLabel(
+            act_row1, text="Acao:", font=FONTS["badge"],
+            text_color=COLORS["text_faint"],
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkComboBox(
+            act_row1,
+            values=["walk", "rope", "shovel", "ladder", "teleport", "home", "refill"],
+            variable=self._var_action_pos,
+            width=140, height=28, font=FONTS["body"],
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_label"], button_color=COLORS["accent"],
+            dropdown_fg_color=COLORS["bg_card"],
+        ).pack(side="left")
+
+        # ==================================================================
+        # FORMA 2: Entrada Manual
+        # ==================================================================
+        sec2 = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=10)
+        sec2.grid(row=3, column=0, padx=12, pady=(0, 6), sticky="ew")
+
+        ctk.CTkLabel(
+            sec2, text="Entrada Manual", font=FONTS["badge"],
+            text_color=COLORS["accent_light"],
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+
+        manual_row = ctk.CTkFrame(sec2, fg_color="transparent")
+        manual_row.pack(fill="x", padx=8, pady=(0, 8))
         for label, var, w in [
-            ("X", self._var_x, 80),
-            ("Y", self._var_y, 80),
-            ("Z", self._var_z, 50),
+            ("X", self._var_x, 76),
+            ("Y", self._var_y, 76),
+            ("Z", self._var_z, 48),
             ("Acao", self._var_action, 100),
         ]:
-            ctk.CTkLabel(add_row, text=label, font=FONTS["badge"],
-                         text_color=COLORS["text_faint"], width=24).pack(side="left", padx=(8, 2), pady=6)
+            ctk.CTkLabel(
+                manual_row, text=label, font=FONTS["badge"],
+                text_color=COLORS["text_faint"], width=24,
+            ).pack(side="left", padx=(8, 2))
             ctk.CTkEntry(
-                add_row, textvariable=var, height=28, width=w, corner_radius=6,
+                manual_row, textvariable=var, height=28, width=w, corner_radius=6,
                 fg_color=COLORS["bg_input"], border_color=COLORS["border"],
                 text_color=COLORS["text_label"], font=FONTS["body"],
-            ).pack(side="left", padx=(0, 6), pady=6)
+            ).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(
+            manual_row, text="+ Adicionar", font=FONTS["small"], height=28,
+            corner_radius=8, fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+            command=self._add_manual,
+        ).pack(side="left", padx=(8, 0))
 
-        # --- Cabecalho da tabela ---
+        # ---- Cabecalho da tabela ----
         headers = ["#", "X", "Y", "Z", "Acao"]
         widths  = [30, 70, 70, 40, 80]
         col_frame = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=6)
-        col_frame.grid(row=3, column=0, padx=12, pady=(0, 4), sticky="ew")
+        col_frame.grid(row=4, column=0, padx=12, pady=(0, 4), sticky="ew")
         for h, w in zip(headers, widths):
-            ctk.CTkLabel(col_frame, text=h, font=FONTS["badge"],
-                         text_color=COLORS["text_faint"], width=w).pack(side="left", padx=6, pady=6)
+            ctk.CTkLabel(
+                col_frame, text=h, font=FONTS["badge"],
+                text_color=COLORS["text_faint"], width=w,
+            ).pack(side="left", padx=6, pady=6)
 
-        # --- Scroll de waypoints ---
+        # ---- Scroll de waypoints ----
         self._wp_scroll = ctk.CTkScrollableFrame(card, fg_color="transparent", corner_radius=0)
-        self._wp_scroll.grid(row=4, column=0, padx=12, pady=(0, 12), sticky="nsew")
+        self._wp_scroll.grid(row=6, column=0, padx=12, pady=(0, 12), sticky="nsew")
         self._refresh_waypoints()
 
     def _config_panel(self):
@@ -388,10 +487,10 @@ class CavebotTab(ctk.CTkFrame):
             row=0, column=0, padx=16, pady=(14, 8), sticky="w")
 
         opts = [
-            ("Lootar criaturas",  "loop",                    True),
-            ("Atacar automatico", "use_pathfinding",         True),
-            ("Anti-stuck",        "enable_anti_stuck",       True),
-            ("Pausar se atacado", "pause_follow_in_combat",  False),
+            ("Lootar criaturas",  "loop",                      True),
+            ("Atacar automatico", "use_pathfinding",           True),
+            ("Anti-stuck",        "enable_anti_stuck",         True),
+            ("Pausar se atacado", "pause_follow_in_combat",    False),
             ("Desviar perigosos", "avoid_dangerous_creatures", False),
         ]
         for i, (lbl, cfg_key, default) in enumerate(opts):
@@ -409,15 +508,11 @@ class CavebotTab(ctk.CTkFrame):
             row=10, column=0, padx=16, pady=(16, 4), sticky="w")
         self._var_target_mode = ctk.StringVar(value="Mais proximo")
         ctk.CTkComboBox(
-            card,
-            values=["Menor HP", "Mais proximo", "Mais longe", "Mais forte"],
+            card, values=["Menor HP", "Mais proximo", "Mais longe", "Mais forte"],
             variable=self._var_target_mode,
-            font=FONTS["body"],
-            fg_color=COLORS["bg_input"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text_label"],
-            button_color=COLORS["accent"],
-            dropdown_fg_color=COLORS["bg_card"],
+            font=FONTS["body"], fg_color=COLORS["bg_input"],
+            border_color=COLORS["border"], text_color=COLORS["text_label"],
+            button_color=COLORS["accent"], dropdown_fg_color=COLORS["bg_card"],
         ).grid(row=11, column=0, padx=16, pady=(0, 16), sticky="ew")
 
         ctk.CTkLabel(card, text="Timeout stuck (s)", font=FONTS["small"],
