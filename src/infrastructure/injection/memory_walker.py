@@ -1,92 +1,101 @@
 """
-MemoryWalker - Movimento via WriteProcessMemory nos enderecos go_to_x/y/z.
+MemoryWalker - Movimento via SendInput + KEYEVENTF_SCANCODE.
 
-Metodo identico ao ElfBot / XenoBot:
-  Escreve go_to_x, go_to_y, go_to_z e tiles_to_go diretamente na
-  memoria do processo Tibia 8.60. O cliente processa o movimento
-  internamente sem necessidade de foco de janela ou input de teclado.
+Diagnostico historico:
+  v1 - PostMessage(WM_KEYDOWN/WM_KEYUP): digitava no chat quando o chat
+       box tinha foco interno no Tibia (BUG-POSTMESSAGE).
+  v2 - WriteProcessMemory nos enderecos go_to_x/y/z (TibiaAPI 0x63FED4):
+       WPM retornava OK mas o personagem nao se movia. Os enderecos GoTo
+       sao reconhecidos pelo cliente oficial, mas nao pelo servidor Kaldrox.
+  v3 (atual) - SendInput via KeyboardInjector.send_key_background(vk).
+       SendInput injeta no fluxo global do Windows (GetAsyncKeyState),
+       que o Tibia 8.60 le para processar o movimento. Nao exige foco da
+       janela. Nao digita no chat (KEYEVENTF_SCANCODE, sem wVk).
 
-Enderecos usados (TibiaAPI 8.60 / addresses_860.py PLAYER_EXTRA):
-  go_to_x    = 0x63FED4  (Experience + 72)
-  go_to_y    = 0x63FED8  (Experience + 76)
-  go_to_z    = 0x63FEDC  (Experience + 80)
-  tiles_to_go = 0x63FEA4
+Arquitetura:
+  walk_to(current, destination) calcula dx/dy, mapeia para VK Numpad e
+  delega para self._injector.send_key_background(vk). O injector ja tem
+  toda a infraestrutura SendInput testada e funcionando (keyboard_injector.py).
 
-Por que WriteProcessMemory funciona (e PostMessage nao):
-  - PostMessage(WM_KEYDOWN) injeta na message queue da janela principal.
-    Quando o foco interno esta no chat box, os WM_KEYDOWN viram texto
-    ('8888...') em vez de mover o personagem.
-  - WriteProcessMemory escreve diretamente nos registros de movimento
-    do cliente Tibia 8.60, que sao processados pelo loop interno
-    independente de foco ou estado do chat.
-
-Assinatura de walk_to:
-  walk_to(current: Position, destination: Position) -> bool
-
-  A direcao e calculada como:
-    dx = clamp(destination.x - current.x, -1, 1)
-    dy = clamp(destination.y - current.y, -1, 1)
-    next_tile = Position(current.x + dx, current.y + dy, current.z)
-
-  Escreve next_tile em go_to_x/y/z e tiles_to_go=1.
+Mapa direcional Numpad:
+  (dx=0, dy=-1) Norte -> VK_NUMPAD8
+  (dx=0, dy=+1) Sul   -> VK_NUMPAD2
+  (dx=-1,dy=0)  Oeste -> VK_NUMPAD4
+  (dx=+1,dy=0)  Leste -> VK_NUMPAD6
+  (dx=-1,dy=-1) NW    -> VK_NUMPAD7
+  (dx=+1,dy=-1) NE    -> VK_NUMPAD9
+  (dx=-1,dy=+1) SW    -> VK_NUMPAD1
+  (dx=+1,dy=+1) SE    -> VK_NUMPAD3
 """
 import time
 from typing import Optional
 
+import win32con
+
 from src.core.value_objects.position import Position
-from src.core.value_objects.address import MemoryAddress
 from src.infrastructure.logging.logger import get_logger
 
-# Enderecos PLAYER_EXTRA (TibiaAPI 8.60)
-_ADDR_GO_TO_X    = MemoryAddress(0x63FED4)  # Experience + 72
-_ADDR_GO_TO_Y    = MemoryAddress(0x63FED8)  # Experience + 76
-_ADDR_GO_TO_Z    = MemoryAddress(0x63FEDC)  # Experience + 80
-_ADDR_TILES_TO_GO = MemoryAddress(0x63FEA4)
+# Mapa (dx, dy) -> VK code Numpad
+_DIR_TO_VK = {
+    ( 0, -1): win32con.VK_NUMPAD8,  # Norte
+    ( 0,  1): win32con.VK_NUMPAD2,  # Sul
+    (-1,  0): win32con.VK_NUMPAD4,  # Oeste
+    ( 1,  0): win32con.VK_NUMPAD6,  # Leste
+    (-1, -1): win32con.VK_NUMPAD7,  # Noroeste
+    ( 1, -1): win32con.VK_NUMPAD9,  # Nordeste
+    (-1,  1): win32con.VK_NUMPAD1,  # Sudoeste
+    ( 1,  1): win32con.VK_NUMPAD3,  # Sudeste
+}
 
 
 class MemoryWalker:
     """
-    Controla o movimento do personagem via WriteProcessMemory.
+    Controla o movimento do personagem via SendInput (KEYEVENTF_SCANCODE).
 
-    Escreve diretamente nos registros go_to_x/y/z + tiles_to_go
-    do cliente Tibia 8.60. Nao usa teclado, PostMessage ou HWND.
+    Delega para KeyboardInjector.send_key_background(vk) que ja usa a
+    implementacao correta de SendInput para o Tibia 8.60.
 
-    Requer um memory_writer (MemoryWriter) com process_handle ativo.
+    Parametros do construtor:
+        memory_writer:      ignorado (mantido por compatibilidade de assinatura
+                            com BotEngine que passa memory_writer).
+        window_title_hint:  ignorado (SendInput nao usa HWND).
     """
 
     DEFAULT_STEP_DELAY = 0.45
 
     def __init__(self, memory_writer=None, window_title_hint: str = "Tibia") -> None:
-        """
-        Parametros:
-            memory_writer:      MemoryWriter instanciado pelo BotEngine.
-                                Obrigatorio para funcionar; sem ele walk_to
-                                retorna False com log de erro.
-            window_title_hint:  Ignorado (mantido por compatibilidade de assinatura).
-        """
-        self._writer = memory_writer
+        self._injector = None  # injetado via set_injector() pelo BotEngine
         self._log = get_logger("MemoryWalker")
         self._last_step_time: float = 0.0
 
-        if memory_writer is None:
-            self._log.warning(
-                "MemoryWalker instanciado sem memory_writer! "
-                "walk_to retornara False ate um writer ser injetado via set_writer()."
+        # memory_writer ignorado nesta versao - SendInput nao usa WPM
+        if memory_writer is not None:
+            self._log.debug(
+                "memory_writer recebido mas ignorado: "
+                "MemoryWalker v3 usa SendInput via KeyboardInjector."
             )
 
     # ------------------------------------------------------------------
-    # Injecao tardia do writer (caso instanciado antes do attach)
+    # Injecao do KeyboardInjector (chamado pelo BotEngine.start())
     # ------------------------------------------------------------------
 
-    def set_writer(self, memory_writer) -> None:
-        """Injeta ou substitui o MemoryWriter apos a instanciacao."""
-        self._writer = memory_writer
-        self._log.debug("MemoryWriter injetado no MemoryWalker.")
+    def set_injector(self, injector) -> None:
+        """
+        Injeta o KeyboardInjector apos a instanciacao.
+        Deve ser chamado pelo BotEngine logo apos start(), passando
+        self._injector (o mesmo KeyboardInjector ja configurado com PID).
+        """
+        self._injector = injector
+        self._log.debug("KeyboardInjector injetado no MemoryWalker.")
 
-    # set_hwnd mantido por compatibilidade - ignorado nesta implementacao
+    def set_writer(self, memory_writer) -> None:
+        """Mantido por compatibilidade - ignorado nesta versao."""
+        self._log.debug("set_writer() chamado - ignorado (v3 usa SendInput).")
+
     def set_hwnd(self, hwnd: int) -> None:
+        """Mantido por compatibilidade - ignorado nesta versao."""
         self._log.debug(
-            f"set_hwnd({hwnd:#010x}) chamado - ignorado (WriteProcessMemory nao usa HWND)."
+            f"set_hwnd({hwnd:#010x}) chamado - ignorado (SendInput nao usa HWND)."
         )
 
     # ------------------------------------------------------------------
@@ -95,24 +104,19 @@ class MemoryWalker:
 
     def walk_to(self, current: Position, destination: Position) -> bool:
         """
-        Envia um passo de movimento via WriteProcessMemory.
+        Envia um passo de movimento via SendInput.
 
-        Parametros:
-            current:     posicao atual do player (player.position)
-            destination: tile destino (proximo passo do path)
+        Calcula a direcao (dx, dy) entre current e destination,
+        mapeia para o VK Numpad correspondente e chama
+        self._injector.send_key_background(vk).
 
-        Calcula o proximo tile (1 sqm na direcao do destino) e escreve:
-            go_to_x    = next_tile.x
-            go_to_y    = next_tile.y
-            go_to_z    = next_tile.z
-            tiles_to_go = 1
-
-        Retorna True se todos os writes foram bem-sucedidos.
+        Retorna True se a tecla foi enviada com sucesso.
         """
-        if self._writer is None:
+        if self._injector is None:
             self._log.error(
-                "walk_to chamado sem MemoryWriter! "
-                "Verifique se BotEngine.start() foi chamado antes de habilitar scripts."
+                "walk_to chamado sem KeyboardInjector! "
+                "Chame bot_engine.walker.set_injector(bot_engine.injector) "
+                "apos BotEngine.start()."
             )
             return False
 
@@ -123,32 +127,23 @@ class MemoryWalker:
             self._log.debug("walk_to: current == destination, sem movimento.")
             return False
 
-        next_x = current.x + dx
-        next_y = current.y + dy
-        next_z = current.z
+        vk = _DIR_TO_VK.get((dx, dy))
+        if vk is None:
+            self._log.warning(f"walk_to: direcao ({dx},{dy}) nao mapeada.")
+            return False
 
-        ok_x = self._writer.write_int(_ADDR_GO_TO_X,    next_x)
-        ok_y = self._writer.write_int(_ADDR_GO_TO_Y,    next_y)
-        ok_z = self._writer.write_int(_ADDR_GO_TO_Z,    next_z)
-        ok_t = self._writer.write_int(_ADDR_TILES_TO_GO, 1)
-
-        ok = ok_x and ok_y and ok_z and ok_t
-
-        if ok:
+        try:
+            self._injector.send_key_background(vk)
             self._last_step_time = time.time()
             self._log.debug(
                 f"walk_to ({current.x},{current.y},{current.z}) -> "
-                f"({next_x},{next_y},{next_z}) "
-                f"dir=({dx},{dy}) WPM OK"
+                f"({destination.x},{destination.y},{destination.z}) "
+                f"dir=({dx},{dy}) vk=0x{vk:02X} SendInput OK"
             )
-        else:
-            self._log.warning(
-                f"walk_to FALHOU: ok_x={ok_x} ok_y={ok_y} "
-                f"ok_z={ok_z} ok_tiles={ok_t} "
-                f"| handle={getattr(self._writer._pm, 'process_handle', 'N/A')}"
-            )
-
-        return ok
+            return True
+        except Exception as e:
+            self._log.error(f"walk_to SendInput erro: {e}", exc_info=True)
+            return False
 
     def cooldown_passed(self, step_delay: float = DEFAULT_STEP_DELAY) -> bool:
         """True se ja passou step_delay segundos desde o ultimo passo."""
