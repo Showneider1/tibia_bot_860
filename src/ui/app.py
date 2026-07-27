@@ -8,7 +8,7 @@ Fluxo de dados:
 
 Integracao com BotEngine:
     app = BotApp()
-    app.bot_engine = bot_engine  # injeta antes de app.run()
+    app.set_bot_engine(bot_engine)  # registra scripts e injeta engine
     app.run()
 """
 import threading
@@ -22,6 +22,7 @@ from src.ui.tabs.healing_tab import HealingTab
 from src.ui.tabs.cavebot_tab import CavebotTab
 from src.ui.tabs.settings_tab import SettingsTab
 from src.ui.widgets.log_panel import LogPanel
+from src.application.scripts.cavebot_script import CavebotScript
 
 
 class BotApp:
@@ -29,7 +30,7 @@ class BotApp:
     Janela principal da UI do TibiaBot 860.
 
     Atributos publicos:
-        bot_engine: instancia de BotEngine a ser injetada antes de run().
+        bot_engine: instancia de BotEngine a ser injetada via set_bot_engine().
                     Se None, a UI funciona em modo demo (dados zerados).
         _player_data: dict com os dados atuais do player exibidos na UI.
     """
@@ -48,7 +49,6 @@ class BotApp:
         self.bot_engine = None
 
         # Dados exibidos na UI — inicialmente zerados.
-        # Atualizado por update_from_engine() quando o bot conecta.
         self._player_data = {
             "name":     "--",
             "level":    0,
@@ -67,15 +67,35 @@ class BotApp:
     # Integracao com BotEngine
     # ------------------------------------------------------------------
 
+    def set_bot_engine(self, engine) -> None:
+        """
+        Injeta o BotEngine e registra os scripts padrao no script_engine.
+
+        Substitui a atribuicao direta `app.bot_engine = engine`.
+        Deve ser chamado ANTES de app.run().
+        """
+        self.bot_engine = engine
+        self._register_default_scripts()
+
+    def _register_default_scripts(self) -> None:
+        """
+        Registra scripts built-in no script_engine do BotEngine.
+        Idempotente: so registra se o script ainda nao estiver na lista.
+        """
+        if self.bot_engine is None:
+            return
+        se = self.bot_engine.script_engine
+        registered = {s["name"] for s in se.list_scripts()}
+
+        if "CaveBot" not in registered:
+            cavebot = CavebotScript()
+            cavebot.enabled = False   # comeca desativado — a UI controla
+            se.register(cavebot)
+
     def update_from_engine(self, player) -> None:
         """
         Atualiza _player_data com os dados lidos da memoria pelo BotEngine.
-
-        Deve ser chamado pelo loop de engine (thread separada).
-        Agenda o refresh da UI via root.after() para ser thread-safe.
-
-        Args:
-            player: instancia de Player retornada por PlayerReader.get_player()
+        Thread-safe: agenda refresh da UI via root.after().
         """
         if player is None:
             return
@@ -142,7 +162,6 @@ class BotApp:
     # ------------------------------------------------------------------
 
     def show_tab(self, name: str) -> None:
-        """Exibe a aba com o nome fornecido e marca como ativa na sidebar."""
         for key, tab in self._tabs.items():
             if key == name:
                 tab.tkraise()
@@ -153,7 +172,6 @@ class BotApp:
     # ------------------------------------------------------------------
 
     def toggle_bot(self) -> None:
-        """Liga ou desliga o bot, tentando conectar ao engine se disponivel."""
         self.bot_running = not self.bot_running
         status = "ATIVADO" if self.bot_running else "PAUSADO"
         color  = COLORS["online_green"] if self.bot_running else COLORS["warn_yellow"]
@@ -164,13 +182,9 @@ class BotApp:
             self._connect_engine()
 
     def _connect_engine(self) -> None:
-        """
-        Tenta iniciar o BotEngine e o loop de leitura.
-        Se bot_engine for None, loga aviso de modo demo.
-        """
         if self.bot_engine is None:
             self.log_panel.log(
-                "[DEMO] Sem BotEngine injetado. Dados reais exigem bot_engine.",
+                "[DEMO] Sem BotEngine injetado. Dados reais exigem set_bot_engine().",
                 COLORS["text_faint"],
             )
             return
@@ -185,11 +199,6 @@ class BotApp:
             self.sidebar.update_bot_status(False)
 
     def _start_engine_loop(self) -> None:
-        """
-        Inicia thread de leitura de memoria.
-        Executa bot_engine.tick() a cada 150ms e chama update_from_engine()
-        com o player lido. Para automaticamente quando bot_running = False.
-        """
         engine = self.bot_engine
 
         def _loop():
@@ -214,18 +223,15 @@ class BotApp:
     # ------------------------------------------------------------------
 
     def log(self, msg: str, color: str = None) -> None:
-        """Atalho para LogPanel.log()."""
         self.log_panel.log(msg, color)
 
     def _on_close(self) -> None:
-        """Callback chamado ao fechar a janela."""
         self.bot_running = False
         if self.bot_engine:
             self.bot_engine.stop()
         self.root.destroy()
 
     def run(self) -> None:
-        """Inicia o mainloop da UI."""
         self.log_panel.log(
             "TibiaBot 860 iniciado. Clique em INICIAR BOT para conectar.",
             COLORS["text_muted"],

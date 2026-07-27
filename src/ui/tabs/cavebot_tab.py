@@ -41,7 +41,6 @@ DIRECTIONS = [
 
 WP_TYPES = ["Walk", "Node", "Stand", "Rope", "Shovel", "Ladder", "Use", "Lure", "Action"]
 
-# Cores por tipo de waypoint
 WP_TYPE_COLORS = {
     "Walk":   "#3a7ebf",
     "Node":   "#4a9e6b",
@@ -92,7 +91,6 @@ class CavebotTab(ctk.CTkFrame):
         super().__init__(parent, fg_color=COLORS["bg_dark"], corner_radius=0)
         self.app = app
 
-        # Estado
         self._active = False
         self._sections: list[_Section] = [_Section("Secao 1")]
         self._current_section_idx = 0
@@ -105,7 +103,6 @@ class CavebotTab(ctk.CTkFrame):
         self._var_z = ctk.StringVar(value="7")
         self._opt_vars: dict = {}
 
-        # Refs de widgets
         self._btn_activate: ctk.CTkButton | None = None
         self._section_list_frame: ctk.CTkFrame | None = None
         self._wp_scroll: ctk.CTkScrollableFrame | None = None
@@ -116,37 +113,22 @@ class CavebotTab(ctk.CTkFrame):
         self._update_pos_label()
 
     # ------------------------------------------------------------------
-    # Helpers: engine / player
+    # Helpers: engine / script / player
     # ------------------------------------------------------------------
 
     def _get_script(self):
+        """Retorna o CavebotScript registrado no script_engine, ou None."""
         engine = getattr(self.app, "bot_engine", None)
         if engine is None:
             return None
-        se = getattr(engine, "script_engine", None)
-        if se is not None:
-            for s in getattr(se, "_scripts", []):
-                if getattr(s, "name", "") in ("CaveBot", "cavebot", "Cavebot"):
-                    return s
-        scripts = getattr(engine, "scripts", None) or getattr(engine, "_scripts", None)
-        if scripts is None:
-            return None
-        if isinstance(scripts, dict):
-            return scripts.get("CaveBot") or scripts.get("cavebot")
-        for s in scripts:
-            if getattr(s, "name", "") in ("CaveBot", "cavebot", "Cavebot"):
-                return s
-        return None
+        return engine.script_engine.get_script("CaveBot")
 
     def _get_player_pos(self):
         try:
             engine = getattr(self.app, "bot_engine", None)
             if engine is None:
                 return None
-            player = getattr(engine, "player", None) or getattr(engine, "_player", None)
-            if player is None:
-                return None
-            pos = getattr(player, "position", None)
+            pos = getattr(getattr(engine, "player", None), "position", None)
             if pos and pos.x > 0 and pos.y > 0:
                 return pos
         except Exception:
@@ -183,42 +165,28 @@ class CavebotTab(ctk.CTkFrame):
         engine = getattr(self.app, "bot_engine", None)
 
         if self._active:
-            # --- ATIVAR ---
-            # 1. Sincroniza waypoints de todas as secoes habilitadas para o script
             total_wps = 0
             if script:
                 total_wps = self._sync_waypoints_to_script(script)
-                # 2. Habilita o script (BaseScript.enabled — verificado pelo ScriptEngine)
                 script.enabled = True
                 script.on_enable()
-
-            # 3. Habilita o bot_engine para que tick() execute os scripts
             if engine:
                 engine.enabled = True
-
             state_msg = f"Cavebot ATIVADO ({total_wps} waypoints carregados)."
             color = COLORS["online_green"]
         else:
-            # --- DESATIVAR ---
             if script:
                 script.enabled = False
                 script.on_disable()
-
-            # Desativa o bot_engine somente se nenhum outro script estiver ativo
-            # (para nao interferir em healing, buff, etc.)
-            # Verifica se há algum outro script habilitado
-            other_active = False
+            # Desativa engine somente se nenhum outro script estiver ativo
             if engine:
-                se = getattr(engine, "script_engine", None)
-                if se:
-                    for s in getattr(se, "_scripts", []):
-                        if getattr(s, "name", "") not in ("CaveBot", "cavebot", "Cavebot"):
-                            if getattr(s, "enabled", False):
-                                other_active = True
-                                break
+                other_active = any(
+                    getattr(s, "enabled", False)
+                    for s in engine.script_engine._scripts
+                    if s.name != "CaveBot"
+                )
                 if not other_active:
                     engine.enabled = False
-
             state_msg = "Cavebot desativado."
             color = COLORS["warn_yellow"]
 
@@ -295,7 +263,6 @@ class CavebotTab(ctk.CTkFrame):
     def _toggle_section_enabled(self, idx: int):
         self._sections[idx].enabled = not self._sections[idx].enabled
         self._refresh_section_list()
-        # Se o cavebot estiver ativo, ressincroniza os waypoints imediatamente
         if self._active:
             script = self._get_script()
             if script:
@@ -322,7 +289,6 @@ class CavebotTab(ctk.CTkFrame):
             row.pack(fill="x", padx=4, pady=2)
             row.grid_columnconfigure(1, weight=1)
 
-            # Bolinha de status (verde=enabled, vermelho=disabled)
             status_color = COLORS["online_green"] if sec.enabled else COLORS["hp_red"]
             dot = ctk.CTkButton(
                 row, text="\u25cf", width=22, height=22, corner_radius=11,
@@ -386,7 +352,6 @@ class CavebotTab(ctk.CTkFrame):
         action = self._selected_type.get().lower()
         wp = Waypoint(position=Position(x=x, y=y, z=z), action=action)
         self._section.waypoints.append(wp)
-        # Se o cavebot estiver ativo e a secao habilitada, adiciona ao script tambem
         if self._active and self._section.enabled:
             script = self._get_script()
             if script:
@@ -406,7 +371,6 @@ class CavebotTab(ctk.CTkFrame):
         if 0 <= idx < len(wps):
             wps.pop(idx)
             self._selected_wp_idx = None
-            # Ressincroniza o script se estiver ativo
             if self._active:
                 script = self._get_script()
                 if script:
@@ -506,7 +470,6 @@ class CavebotTab(ctk.CTkFrame):
             self.app.log(f"Erro ao abrir arquivo: {e}", COLORS["hp_red"])
             return
 
-        # Suporte a formato legado (lista simples de waypoints)
         if isinstance(data, list):
             sec = _Section("Importado")
             for item in data:
@@ -546,17 +509,15 @@ class CavebotTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _build(self):
-        self.grid_columnconfigure(0, weight=0)   # painel esquerdo (secoes)
-        self.grid_columnconfigure(1, weight=3)   # painel central (waypoints)
-        self.grid_columnconfigure(2, weight=0)   # painel direito (controles)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=3)
+        self.grid_columnconfigure(2, weight=0)
         self.grid_rowconfigure(1, weight=1)
 
-        self._build_topbar()       # row 0
-        self._build_sections()     # row 1, col 0
-        self._build_wp_panel()     # row 1, col 1
-        self._build_right_panel()  # row 1, col 2
-
-    # ---- Top bar -------------------------------------------------------
+        self._build_topbar()
+        self._build_sections()
+        self._build_wp_panel()
+        self._build_right_panel()
 
     def _build_topbar(self):
         bar = ctk.CTkFrame(self, fg_color=COLORS["bg_card"],
@@ -565,7 +526,6 @@ class CavebotTab(ctk.CTkFrame):
         bar.grid_columnconfigure(1, weight=1)
         bar.grid_propagate(False)
 
-        # Botao ATIVAR / DESATIVAR
         self._btn_activate = ctk.CTkButton(
             bar,
             text="\u25b6  Ativar Cavebot",
@@ -578,14 +538,12 @@ class CavebotTab(ctk.CTkFrame):
         )
         self._btn_activate.grid(row=0, column=0, padx=(16, 8), pady=8)
 
-        # Perfil carregado
         ctk.CTkLabel(
             bar, textvariable=self._var_profile,
             font=FONTS["small"], text_color=COLORS["text_faint"],
             anchor="w",
         ).grid(row=0, column=1, padx=8, sticky="w")
 
-        # Posicao atual
         pos_frame = ctk.CTkFrame(bar, fg_color=COLORS["bg_panel"], corner_radius=8)
         pos_frame.grid(row=0, column=2, padx=4, pady=8)
         ctk.CTkLabel(
@@ -597,7 +555,6 @@ class CavebotTab(ctk.CTkFrame):
             font=FONTS["small"], text_color=COLORS["text_muted"],
         ).pack(side="left", padx=(0, 10))
 
-        # Save / Load
         io_frame = ctk.CTkFrame(bar, fg_color="transparent")
         io_frame.grid(row=0, column=3, padx=(0, 16), pady=8)
         ctk.CTkButton(
@@ -612,8 +569,6 @@ class CavebotTab(ctk.CTkFrame):
             command=self._load_profile,
         ).pack(side="left", padx=3)
 
-    # ---- Painel de secoes (esquerda) -----------------------------------
-
     def _build_sections(self):
         card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"],
                             corner_radius=0, width=180)
@@ -622,7 +577,6 @@ class CavebotTab(ctk.CTkFrame):
         card.grid_rowconfigure(1, weight=1)
         card.grid_columnconfigure(0, weight=1)
 
-        # Header
         hdr = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=0, height=36)
         hdr.grid(row=0, column=0, sticky="ew")
         hdr.grid_propagate(False)
@@ -647,14 +601,12 @@ class CavebotTab(ctk.CTkFrame):
             command=self._remove_section,
         ).pack(side="left", padx=2)
 
-        # Lista de secoes
         self._section_list_frame = ctk.CTkScrollableFrame(
             card, fg_color="transparent", corner_radius=0,
         )
-        self._section_list_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        self._section_list_frame.grid(row=1, column=0, sticky="nsew")
         self._refresh_section_list()
 
-        # Renomear
         ctk.CTkButton(
             card, text="\u270e Renomear", font=FONTS["small"], height=28,
             corner_radius=0,
@@ -663,15 +615,12 @@ class CavebotTab(ctk.CTkFrame):
             command=self._rename_section,
         ).grid(row=2, column=0, sticky="ew")
 
-    # ---- Painel de waypoints (centro) ----------------------------------
-
     def _build_wp_panel(self):
         card = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
         card.grid(row=1, column=1, sticky="nsew")
         card.grid_rowconfigure(1, weight=1)
         card.grid_columnconfigure(0, weight=1)
 
-        # Toolbar de waypoints
         toolbar = ctk.CTkFrame(card, fg_color=COLORS["bg_card"],
                                corner_radius=0, height=40)
         toolbar.grid(row=0, column=0, sticky="ew")
@@ -699,14 +648,11 @@ class CavebotTab(ctk.CTkFrame):
             command=self._refresh_waypoints,
         ).pack(side="left", padx=3)
 
-        # Lista de waypoints
         self._wp_scroll = ctk.CTkScrollableFrame(
             card, fg_color="transparent", corner_radius=0,
         )
         self._wp_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 8))
         self._refresh_waypoints()
-
-    # ---- Painel direito (controles) ------------------------------------
 
     def _build_right_panel(self):
         panel = ctk.CTkFrame(self, fg_color=COLORS["bg_card"],
@@ -721,7 +667,6 @@ class CavebotTab(ctk.CTkFrame):
 
         row_i = 0
 
-        # ---- Tipo de waypoint ----
         ctk.CTkLabel(
             scroll, text="TIPO", font=FONTS["badge"],
             text_color=COLORS["accent_light"],
@@ -746,7 +691,6 @@ class CavebotTab(ctk.CTkFrame):
             btn.grid(row=ti // cols, column=ti % cols, padx=3, pady=3)
             self._type_buttons[t] = btn
 
-        # ---- Grid direcional ----
         ctk.CTkLabel(
             scroll, text="POSICAO ATUAL", font=FONTS["badge"],
             text_color=COLORS["accent_light"],
@@ -770,7 +714,6 @@ class CavebotTab(ctk.CTkFrame):
                 command=lambda dx=dx, dy=dy: self._add_by_position(dx, dy),
             ).grid(row=di // 3, column=di % 3, padx=2, pady=2)
 
-        # ---- Entrada manual ----
         ctk.CTkLabel(
             scroll, text="MANUAL", font=FONTS["badge"],
             text_color=COLORS["accent_light"],
@@ -796,7 +739,6 @@ class CavebotTab(ctk.CTkFrame):
             command=self._add_manual,
         ).pack(fill="x", padx=8, pady=(4, 8))
 
-        # ---- Opcoes ----
         ctk.CTkLabel(
             scroll, text="OPCOES", font=FONTS["badge"],
             text_color=COLORS["accent_light"],
@@ -804,11 +746,11 @@ class CavebotTab(ctk.CTkFrame):
         row_i += 1
 
         opts = [
-            ("Lootar criaturas",   "loot",                     True),
-            ("Atacar automatico",  "auto_attack",              True),
-            ("Anti-stuck",         "enable_anti_stuck",        True),
-            ("Pausar em combate",  "pause_in_combat",          False),
-            ("Desviar perigosos",  "avoid_dangerous",          False),
+            ("Lootar criaturas",   "loot",              True),
+            ("Atacar automatico",  "auto_attack",       True),
+            ("Anti-stuck",         "enable_anti_stuck", True),
+            ("Pausar em combate",  "pause_in_combat",   False),
+            ("Desviar perigosos",  "avoid_dangerous",   False),
         ]
         for lbl, cfg_key, default in opts:
             var = ctk.BooleanVar(value=default)
