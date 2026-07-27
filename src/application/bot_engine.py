@@ -77,6 +77,36 @@ class BotEngine:
         self._health_low_ticks: int = 0
         self._mana_low_ticks: int = 0
 
+        # F1.3 — ProfileManager injetado via set_profile_manager() para evitar
+        # import circular (BotEngine nao importa ProfileManager diretamente).
+        self._profile_manager = None
+
+    # ------------------------------------------------------------------
+    # Integracao com ProfileManager (F1.3)
+    # ------------------------------------------------------------------
+
+    def set_profile_manager(self, profile_manager) -> None:
+        """
+        Injeta o ProfileManager e registra o handler PLAYER_LOADED.
+        Deve ser chamado apos BotApp.set_bot_engine(), antes do loop.
+        """
+        self._profile_manager = profile_manager
+        self.event_manager.subscribe(
+            EventType.PLAYER_LOADED,
+            self._on_player_loaded,
+        )
+        self._log.info("ProfileManager registrado no BotEngine.")
+
+    def _on_player_loaded(self, **kwargs) -> None:
+        """Carrega o perfil do personagem ao detectar o primeiro tick valido."""
+        player = kwargs.get("player")
+        if player and self._profile_manager:
+            try:
+                self._profile_manager.load(player.name, self.script_engine)
+                self._log.info(f"Perfil carregado para '{player.name}'.")
+            except Exception as e:
+                self._log.warning(f"Erro ao carregar perfil de '{player.name}': {e}")
+
     # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
@@ -151,6 +181,10 @@ class BotEngine:
         """
         Le a memoria e atualiza self.player e self.creatures.
 
+        F1.2 — Apos ler o player, propaga player.vocation para
+        engine.config["player_vocation"] quando a vocacao for valida
+        (diferente de 'Unknown', 'Auto', vazio ou None).
+
         Apos ler o player via PlayerReader, busca o player na BattleList
         para sincronizar posicao E nome reais (mais confiaveis que os
         enderecos estaticos).
@@ -162,13 +196,17 @@ class BotEngine:
             self.player = self._player_reader.get_player()
             self.creatures = self._creature_reader.get_creatures()
 
+            # F1.2 — Propaga vocacao real lida da memoria para engine.config.
+            # Guard triplo: nao vazio, nao 'Auto' (placeholder), nao 'Unknown*'.
+            if self.player and self.player.vocation not in ("Unknown", "Auto", "", None):
+                if not str(self.player.vocation).startswith("Unknown("):
+                    self.config["player_vocation"] = self.player.vocation
+
             # Sincroniza posicao e nome com os dados da BattleList
             if self.player and self.creatures:
                 for creature in self.creatures:
                     if creature.id == self.player.id:
                         self.player.position = creature.position
-                        # Sobreescreve nome apenas se a BattleList
-                        # trouxer algo valido (nao 'Unknown' e nao vazio)
                         if creature.name and creature.name not in ("Unknown", ""):
                             self.player.name = creature.name
                         break
