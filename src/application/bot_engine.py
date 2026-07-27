@@ -7,7 +7,9 @@ from typing import Optional, Dict, Any, List
 
 from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
+from src.infrastructure.memory.memory_writer import MemoryWriter
 from src.infrastructure.injection.keyboard_injector import KeyboardInjector
+from src.infrastructure.injection.memory_walker import MemoryWalker
 from src.infrastructure.logging.logger import get_logger
 
 from src.core.entities.player import Player
@@ -46,6 +48,7 @@ class BotEngine:
         player_addresses: Dict[str, Any],
         battle_list_addresses: Dict[str, Any],
         creature_offsets: Dict[str, int],
+        memory_writer: Optional[MemoryWriter] = None,
     ):
         self._log = get_logger("BotEngine")
 
@@ -53,8 +56,17 @@ class BotEngine:
         self._memory = memory_reader
         self._injector = keyboard_injector
 
+        # MemoryWriter: se nao fornecido, cria usando o mesmo process_manager.
+        # Parametro opcional para nao quebrar instanciacoes existentes.
+        if memory_writer is None:
+            memory_writer = MemoryWriter(process_manager)
+        self._memory_writer = memory_writer
+        self._walker = MemoryWalker(self._memory_writer)
+
         self._player_reader = PlayerReader(self._memory, player_addresses)
-        self._creature_reader = CreatureReader(self._memory, battle_list_addresses, creature_offsets)
+        self._creature_reader = CreatureReader(
+            self._memory, battle_list_addresses, creature_offsets
+        )
 
         self.enabled: bool = False
         self.config: Dict[str, Any] = {
@@ -82,15 +94,26 @@ class BotEngine:
         self._profile_manager = None
 
     # ------------------------------------------------------------------
-    # Property publica para o injector
-    # BUG-G FIX: scripts acessavam self._injector diretamente.
-    # Agora usam bot_engine.injector (acesso seguro e encapsulado).
+    # Properties publicas
     # ------------------------------------------------------------------
 
     @property
     def injector(self) -> KeyboardInjector:
-        """Retorna o KeyboardInjector para uso pelos scripts."""
+        """KeyboardInjector para hotkeys, spells e healing."""
         return self._injector
+
+    @property
+    def walker(self) -> MemoryWalker:
+        """
+        MemoryWalker para movimento por injecao de memoria.
+        Usado pelo CavebotScript em substituicao ao SendInput/win32con.
+        """
+        return self._walker
+
+    @property
+    def memory_writer(self) -> MemoryWriter:
+        """MemoryWriter direto, para uso avancado pelos scripts."""
+        return self._memory_writer
 
     # ------------------------------------------------------------------
     # Integracao com ProfileManager (F1.3)
@@ -133,18 +156,17 @@ class BotEngine:
             self._connected = True
             self._connection_retry_count = 0
 
-            # Propaga o PID da janela ao injector para que ele consiga
-            # resolver a janela do cliente mesmo quando o título não
-            # contém "tibia" (caso do Kaldrox Old Client).
             pid = getattr(self._pm, "process_id", None)
             if pid is not None:
                 try:
                     self._injector.set_process_id(pid)
                 except Exception as e:
-                    self._log.debug(f"Não foi possível setar PID no injector: {e}")
+                    self._log.debug(f"Nao foi possivel setar PID no injector: {e}")
 
             self._log.info("Bot conectado ao processo Tibia.")
-            self._log.info(f"Script Engine pronto ({len(self.script_engine.list_scripts())} scripts).")
+            self._log.info(
+                f"Script Engine pronto ({len(self.script_engine.list_scripts())} scripts)."
+            )
             return True
 
         except Exception as e:
@@ -156,6 +178,7 @@ class BotEngine:
         """Desconecta e limpa o estado."""
         self.enabled = False
         self._connected = False
+        self._walker.reset()
         self._pm.detach()
         self._log.info("BotEngine parado.")
 
@@ -204,12 +227,9 @@ class BotEngine:
         Le a memoria e atualiza self.player e self.creatures.
 
         F1.2 - Apos ler o player, propaga player.vocation para
-        engine.config["player_vocation"] quando a vocacao for valida
-        (diferente de 'Unknown', 'Auto', vazio ou None).
+        engine.config["player_vocation"] quando a vocacao for valida.
 
-        Apos ler o player via PlayerReader, busca o player na BattleList
-        para sincronizar posicao E nome reais (mais confiaveis que os
-        enderecos estaticos).
+        Sincroniza posicao e nome reais via BattleList.
         """
         self._last_player = self.player
         self._last_creatures = list(self.creatures)
@@ -218,13 +238,10 @@ class BotEngine:
             self.player = self._player_reader.get_player()
             self.creatures = self._creature_reader.get_creatures()
 
-            # F1.2 - Propaga vocacao real lida da memoria para engine.config.
-            # Guard triplo: nao vazio, nao 'Auto' (placeholder), nao 'Unknown*'.
             if self.player and self.player.vocation not in ("Unknown", "Auto", "", None):
                 if not str(self.player.vocation).startswith("Unknown("):
                     self.config["player_vocation"] = self.player.vocation
 
-            # Sincroniza posicao e nome com os dados da BattleList
             if self.player and self.creatures:
                 for creature in self.creatures:
                     if creature.id == self.player.id:
@@ -237,10 +254,6 @@ class BotEngine:
             self._log.error(f"Erro ao atualizar estado: {e}", exc_info=True)
 
     def _check_and_reconnect(self) -> bool:
-        """
-        Testa a conexao lendo um endereco de referencia.
-        Retorna True se conectado, False se falha.
-        """
         try:
             self._memory.read_int(MemoryAddress(0x63FE8C))
             self._connection_retry_count = 0
@@ -255,7 +268,8 @@ class BotEngine:
                 self.event_manager.emit(EventType.CONNECTION_LOST)
             else:
                 self._log.debug(
-                    f"Reconexao tentativa {self._connection_retry_count}/{self._MAX_RETRY_ATTEMPTS}..."
+                    f"Reconexao tentativa "
+                    f"{self._connection_retry_count}/{self._MAX_RETRY_ATTEMPTS}..."
                 )
             return False
 
@@ -277,14 +291,20 @@ class BotEngine:
 
         if self.player.hp_percent() < 30:
             self._health_low_ticks += 1
-            if self._health_low_ticks == 1 or self._health_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0:
+            if (
+                self._health_low_ticks == 1
+                or self._health_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0
+            ):
                 self.event_manager.emit(EventType.PLAYER_HEALTH_LOW, player=self.player)
         else:
             self._health_low_ticks = 0
 
         if self.player.mana_percent() < 20:
             self._mana_low_ticks += 1
-            if self._mana_low_ticks == 1 or self._mana_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0:
+            if (
+                self._mana_low_ticks == 1
+                or self._mana_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0
+            ):
                 self.event_manager.emit(EventType.PLAYER_MANA_LOW, player=self.player)
         else:
             self._mana_low_ticks = 0

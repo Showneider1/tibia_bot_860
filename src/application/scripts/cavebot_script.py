@@ -13,9 +13,12 @@ Historico de correcoes:
   BUG-SLEEP: time.sleep(step_delay) dentro de execute() bloqueava o script_engine
              inteiro, impedindo healing/buff de rodar durante o walk.
              Corrigido com cooldown baseado em timestamp (_last_step_time).
+  BUG-SENDINPUT: send_key_background + win32con falha com WinError 87 em contextos
+             sem desktop interativo e nao funciona em background.
+             Substituido por MemoryWalker (WriteProcessMemory) nos enderecos
+             go_to_x/y/z + tiles_to_go, identico ao metodo do ElfBot/XenoBot.
 """
 import time
-import win32con
 from typing import Dict, Any, List, Optional
 from .base_script import BaseScript
 from src.core.entities.player import Player
@@ -38,7 +41,6 @@ class CavebotScript(BaseScript):
             "use_pathfinding": True,
 
             # step_delay: intervalo minimo entre passos (segundos).
-            # Substituiu o time.sleep() dentro do execute().
             # Tibia 8.60 walk speed ~470ms; 0.45s e seguro sem travar o loop.
             "step_delay": 0.45,
 
@@ -62,8 +64,6 @@ class CavebotScript(BaseScript):
         self._stuck_counter = 0
         self._last_position: Optional[Position] = None
         self._last_move_time = 0.0
-        # BUG-SLEEP FIX: controla cooldown entre passos sem bloquear o loop.
-        # Substituiu time.sleep(step_delay) dentro de execute().
         self._last_step_time = 0.0
         self._pathfinder = Pathfinder()
         self._current_path: List[Position] = []
@@ -77,14 +77,14 @@ class CavebotScript(BaseScript):
     def on_enable(self) -> None:
         now = time.time()
         self._last_move_time  = now
-        self._last_step_time  = 0.0   # permite o primeiro passo imediato
+        self._last_step_time  = 0.0
         self._current_waypoint_index = 0
         self._current_path    = []
         self._stuck_counter   = 0
         self._last_position   = None
         self._follow_target   = None
         self._last_follow_position = None
-        self._log.info("CaveBot ativado — contadores resetados.")
+        self._log.info("CaveBot ativado - contadores resetados.")
 
     def on_disable(self) -> None:
         self._current_path  = []
@@ -98,10 +98,8 @@ class CavebotScript(BaseScript):
     def execute(self, context: Dict[str, Any]) -> bool:
         """
         Chamado a cada tick pelo ScriptEngine.
-
-        BUG-SLEEP FIX: nao contem mais time.sleep().
-        O cooldown entre passos e controlado por _last_step_time.
-        O loop principal e healing/buff continuam rodando livremente.
+        Cooldown entre passos via _last_step_time (sem time.sleep).
+        Movimento via MemoryWalker (WriteProcessMemory) - sem teclado.
         """
         player: Player = context.get("player")
         creatures: List[Creature] = context.get("creatures", [])
@@ -110,8 +108,14 @@ class CavebotScript(BaseScript):
         if not player or not bot_engine:
             return False
 
-        # Cooldown entre passos: nao envia tecla se ainda nao passou step_delay
-        if time.time() - self._last_step_time < self.config["step_delay"]:
+        # Verifica walker disponivel
+        walker = getattr(bot_engine, "walker", None)
+        if walker is None:
+            self._log.error("bot_engine.walker nao disponivel!")
+            return False
+
+        # Cooldown entre passos
+        if not walker.cooldown_passed(self.config["step_delay"]):
             return False
 
         if self.config["enable_follow"]:
@@ -123,7 +127,9 @@ class CavebotScript(BaseScript):
     # Modo Follow
     # ------------------------------------------------------------------
 
-    def _execute_follow(self, player: Player, creatures: List[Creature], bot_engine) -> bool:
+    def _execute_follow(
+        self, player: Player, creatures: List[Creature], bot_engine: Any
+    ) -> bool:
         target_name = self.config["follow_target_name"]
         if not target_name:
             return False
@@ -139,8 +145,10 @@ class CavebotScript(BaseScript):
                 return False
 
         target_pos = self._follow_target.position
-        if (self._last_follow_position and
-                target_pos.distance_chebyshev(self._last_follow_position) < 1):
+        if (
+            self._last_follow_position
+            and target_pos.distance_chebyshev(self._last_follow_position) < 1
+        ):
             return False
 
         self._last_follow_position = target_pos
@@ -150,7 +158,9 @@ class CavebotScript(BaseScript):
             return False
 
         if distance > self.config["follow_max_distance"]:
-            self._log.warning(f"Follow target muito longe ({distance} sqm), recalculando...")
+            self._log.warning(
+                f"Follow target muito longe ({distance} sqm), recalculando..."
+            )
 
         if self.config["use_pathfinding"]:
             return self._navigate_with_pathfinding(
@@ -162,7 +172,9 @@ class CavebotScript(BaseScript):
     # Modo Waypoint
     # ------------------------------------------------------------------
 
-    def _execute_waypoints(self, player: Player, creatures: List[Creature], bot_engine) -> bool:
+    def _execute_waypoints(
+        self, player: Player, creatures: List[Creature], bot_engine: Any
+    ) -> bool:
         waypoints: List[Waypoint] = self.config.get("waypoints", [])
         if not waypoints:
             return False
@@ -200,7 +212,9 @@ class CavebotScript(BaseScript):
                 return False
 
         if self.config["use_pathfinding"]:
-            return self._navigate_with_pathfinding(player, current_wp.position, bot_engine)
+            return self._navigate_with_pathfinding(
+                player, current_wp.position, bot_engine
+            )
 
         return self._move_towards(player, current_wp.position, bot_engine)
 
@@ -223,7 +237,7 @@ class CavebotScript(BaseScript):
         player: Player,
         target_pos: Position,
         bot_engine: Any,
-        target_is_creature: bool = False
+        target_is_creature: bool = False,
     ) -> bool:
         needs_recalc = (
             not self._current_path
@@ -232,7 +246,9 @@ class CavebotScript(BaseScript):
         )
 
         if needs_recalc:
-            self._current_path = self._pathfinder.find_path(player.position, target_pos)
+            self._current_path = self._pathfinder.find_path(
+                player.position, target_pos
+            )
             if not self._current_path:
                 self._log.warning("Pathfinding falhou! Movimento direto...")
                 return self._move_towards(player, target_pos, bot_engine)
@@ -248,7 +264,9 @@ class CavebotScript(BaseScript):
 
         next_index = current_index + 1
         if next_index < len(self._current_path):
-            return self._move_player(player.position, self._current_path[next_index], bot_engine)
+            return self._move_player(
+                player.position, self._current_path[next_index], bot_engine
+            )
 
         self._current_path = []
         return False
@@ -259,51 +277,44 @@ class CavebotScript(BaseScript):
         return self._current_path[-1].distance_chebyshev(target_pos) > 2
 
     # ------------------------------------------------------------------
-    # Movimento
-    # BUG-SLEEP FIX: _move_player e _move_towards nao tem mais time.sleep().
-    # O cooldown e gerenciado por _last_step_time em execute().
+    # Movimento via MemoryWalker (WriteProcessMemory)
+    # BUG-SENDINPUT FIX: sem teclado, sem win32con, sem foco de janela.
     # ------------------------------------------------------------------
 
-    def _move_player(self, current_pos: Position, next_step: Position, bot_engine: Any) -> bool:
-        dx = next_step.x - current_pos.x
-        dy = next_step.y - current_pos.y
-        vk_code = self._direction_to_key(dx, dy)
-        if vk_code:
-            self._log.debug(
-                f"Andando: ({current_pos.x},{current_pos.y}) -> "
-                f"({next_step.x},{next_step.y}) dx={dx} dy={dy}"
-            )
-            bot_engine.injector.send_key_background(vk_code)
+    def _move_player(
+        self, current_pos: Position, next_step: Position, bot_engine: Any
+    ) -> bool:
+        """
+        Envia um passo via bot_engine.walker.walk_to().
+        Escreve go_to_x/y/z + tiles_to_go diretamente na memoria do processo.
+        """
+        self._log.debug(
+            f"Andando: ({current_pos.x},{current_pos.y}) -> "
+            f"({next_step.x},{next_step.y})"
+        )
+        ok = bot_engine.walker.walk_to(next_step)
+        if ok:
             self._last_move_time = time.time()
-            self._last_step_time = time.time()   # registra o timestamp do passo
-            return True
-        self._log.warning(f"Direcao invalida: dx={dx} dy={dy}")
-        return False
+            self._last_step_time = time.time()
+        return ok
 
-    def _move_towards(self, player: Player, target: Position, bot_engine: Any) -> bool:
+    def _move_towards(
+        self, player: Player, target: Position, bot_engine: Any
+    ) -> bool:
+        """
+        Movimento direto (sem pathfinding):
+        calcula o proximo tile na direcao do alvo e envia via MemoryWalker.
+        """
         dx = max(-1, min(1, target.x - player.position.x))
         dy = max(-1, min(1, target.y - player.position.y))
         if dx == 0 and dy == 0:
             return False
-        vk_code = self._direction_to_key(dx, dy)
-        if vk_code:
-            self._log.debug(f"Movimento direto: dx={dx} dy={dy}")
-            bot_engine.injector.send_key_background(vk_code)
-            self._last_move_time = time.time()
-            self._last_step_time = time.time()   # registra o timestamp do passo
-            return True
-        return False
-
-    def _direction_to_key(self, dx: int, dy: int) -> Optional[int]:
-        if   dx ==  1 and dy ==  0: return win32con.VK_RIGHT
-        elif dx == -1 and dy ==  0: return win32con.VK_LEFT
-        elif dx ==  0 and dy == -1: return win32con.VK_UP
-        elif dx ==  0 and dy ==  1: return win32con.VK_DOWN
-        elif dx ==  1 and dy == -1: return win32con.VK_NUMPAD9
-        elif dx == -1 and dy == -1: return win32con.VK_NUMPAD7
-        elif dx ==  1 and dy ==  1: return win32con.VK_NUMPAD3
-        elif dx == -1 and dy ==  1: return win32con.VK_NUMPAD1
-        return None
+        next_step = Position(
+            player.position.x + dx,
+            player.position.y + dy,
+            player.position.z,
+        )
+        return self._move_player(player.position, next_step, bot_engine)
 
     # ------------------------------------------------------------------
     # Anti-stuck
@@ -329,7 +340,7 @@ class CavebotScript(BaseScript):
             self._stuck_counter = 0
             self._current_path  = []
         else:
-            self._current_path  = []
+            self._current_path   = []
             self._last_move_time = time.time()
 
     # ------------------------------------------------------------------
@@ -344,8 +355,10 @@ class CavebotScript(BaseScript):
             return False
         for creature in creatures:
             if creature.name in dangerous:
-                if (player.position.distance_chebyshev(creature.position) <= 5 and
-                        target.distance_chebyshev(creature.position) <= 5):
+                if (
+                    player.position.distance_chebyshev(creature.position) <= 5
+                    and target.distance_chebyshev(creature.position) <= 5
+                ):
                     return True
         return False
 
@@ -353,7 +366,9 @@ class CavebotScript(BaseScript):
     # Acoes de waypoint
     # ------------------------------------------------------------------
 
-    def _execute_waypoint_action(self, waypoint: Waypoint, bot_engine: Any) -> None:
+    def _execute_waypoint_action(
+        self, waypoint: Waypoint, bot_engine: Any
+    ) -> None:
         if not hasattr(waypoint, "action") or not waypoint.action:
             return
         action = waypoint.action.lower()
@@ -410,11 +425,11 @@ class CavebotScript(BaseScript):
 
     def get_status(self) -> Dict:
         return {
-            "enabled":           self.enabled,
-            "current_waypoint":  self._current_waypoint_index,
-            "total_waypoints":   len(self.config.get("waypoints", [])),
-            "follow_mode":       self.config["enable_follow"],
-            "follow_target":     self.config.get("follow_target_name", ""),
-            "stuck_count":       self._stuck_counter,
-            "last_step_ago_ms":  int((time.time() - self._last_step_time) * 1000),
+            "enabled":          self.enabled,
+            "current_waypoint": self._current_waypoint_index,
+            "total_waypoints":  len(self.config.get("waypoints", [])),
+            "follow_mode":      self.config["enable_follow"],
+            "follow_target":    self.config.get("follow_target_name", ""),
+            "stuck_count":      self._stuck_counter,
+            "last_step_ago_ms": int((time.time() - self._last_step_time) * 1000),
         }
