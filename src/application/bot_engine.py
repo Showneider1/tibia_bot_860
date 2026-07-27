@@ -5,6 +5,12 @@ Gerencia loop principal, leitura de memoria, scripts e eventos.
 import time
 from typing import Optional, Dict, Any, List
 
+import win32gui
+try:
+    import win32process
+except ImportError:
+    win32process = None
+
 from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.memory.memory_writer import MemoryWriter
@@ -61,6 +67,9 @@ class BotEngine:
         if memory_writer is None:
             memory_writer = MemoryWriter(process_manager)
         self._memory_writer = memory_writer
+
+        # WindowWalker: usa PostMessage(WM_KEYDOWN/WM_KEYUP) no HWND do Tibia.
+        # memory_writer passado por compatibilidade (ignorado internamente).
         self._walker = MemoryWalker(self._memory_writer)
 
         self._player_reader = PlayerReader(self._memory, player_addresses)
@@ -105,8 +114,8 @@ class BotEngine:
     @property
     def walker(self) -> MemoryWalker:
         """
-        MemoryWalker para movimento por injecao de memoria.
-        Usado pelo CavebotScript em substituicao ao SendInput/win32con.
+        WindowWalker para movimento via PostMessage(WM_KEYDOWN/WM_KEYUP).
+        Interface identica ao MemoryWalker anterior: walk_to / cooldown_passed / reset.
         """
         return self._walker
 
@@ -114,6 +123,63 @@ class BotEngine:
     def memory_writer(self) -> MemoryWriter:
         """MemoryWriter direto, para uso avancado pelos scripts."""
         return self._memory_writer
+
+    # ------------------------------------------------------------------
+    # Resolucao de HWND para o WindowWalker
+    # ------------------------------------------------------------------
+
+    def _resolve_hwnd(self, pid: int) -> Optional[int]:
+        """
+        Encontra o HWND da janela principal do Tibia dado o PID do processo.
+        Usa win32process.GetWindowThreadProcessId para filtrar por PID exato.
+        Fallback: busca por titulo contendo 'Tibia'.
+        """
+        if win32process is None:
+            return None
+
+        result: list[int] = []
+
+        def callback(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                try:
+                    _, hwnd_pid = win32process.GetWindowThreadProcessId(hwnd)
+                except Exception:
+                    return True
+                if hwnd_pid == pid:
+                    result.append(hwnd)
+            return True
+
+        try:
+            win32gui.EnumWindows(callback, None)
+        except Exception as e:
+            self._log.debug(f"EnumWindows(pid) falhou: {e}")
+
+        if result:
+            hwnd = result[0]
+            self._log.debug(f"HWND resolvido via PID={pid}: {hwnd:#010x}")
+            return hwnd
+
+        # Fallback por titulo
+        hwnd_fallback = win32gui.FindWindow(None, None)
+        result2: list[int] = []
+
+        def callback2(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title and "tibia" in title.lower():
+                    result2.append(hwnd)
+            return True
+
+        try:
+            win32gui.EnumWindows(callback2, None)
+        except Exception:
+            pass
+
+        if result2:
+            self._log.debug(f"HWND resolvido via titulo: {result2[0]:#010x}")
+            return result2[0]
+
+        return None
 
     # ------------------------------------------------------------------
     # Integracao com ProfileManager (F1.3)
@@ -146,7 +212,7 @@ class BotEngine:
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """Conecta ao processo do Tibia e inicializa leitores."""
+        """Conecta ao processo do Tibia, inicializa leitores e propaga HWND ao walker."""
         try:
             if not self._pm.is_running():
                 if not self._pm.attach():
@@ -158,10 +224,21 @@ class BotEngine:
 
             pid = getattr(self._pm, "process_id", None)
             if pid is not None:
+                # Propaga PID ao KeyboardInjector (SendInput)
                 try:
                     self._injector.set_process_id(pid)
                 except Exception as e:
                     self._log.debug(f"Nao foi possivel setar PID no injector: {e}")
+
+                # Propaga HWND ao WindowWalker para PostMessage direto
+                hwnd = self._resolve_hwnd(pid)
+                if hwnd:
+                    self._walker.set_hwnd(hwnd)
+                else:
+                    self._log.warning(
+                        "HWND nao encontrado para PID=%d; "
+                        "walker fara EnumWindows no primeiro walk_to.", pid
+                    )
 
             self._log.info("Bot conectado ao processo Tibia.")
             self._log.info(
