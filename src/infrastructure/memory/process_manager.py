@@ -11,7 +11,7 @@ from src.infrastructure.logging.logger import get_logger
 # ---------------------------------------------------------------------------
 # Constantes do processo
 # ---------------------------------------------------------------------------
-PROCESS_NAME = "Tibia.exe"          # ajuste se o executável tiver outro nome
+PROCESS_NAME = "Not Open.exe"       # nome do executável do cliente Tibia/Kaldrox
 PROCESS_RW_ACCESS = 0x1F0FFF        # PROCESS_ALL_ACCESS (leitura + escrita)
 
 # ---------------------------------------------------------------------------
