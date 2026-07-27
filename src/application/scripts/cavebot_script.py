@@ -12,6 +12,10 @@ BUG-B CORRIGIDO: _navigate_with_pathfinding() nao mais usa
 BUG-C CORRIGIDO: max_distance_to_waypoint aumentado de 1 para 2.
   Tolerancia 1 nunca era atingida por jitter de posicao.
   Valor 2 e padrao seguro para Tibia 8.60. Configuravel.
+
+BUG-G CORRIGIDO: _move_player() e _move_towards() usam
+  bot_engine.injector (property publica) ao inves de
+  bot_engine._injector (atributo privado).
 """
 import time
 import win32con
@@ -218,7 +222,6 @@ class CavebotScript(BaseScript):
 
         current_index = self._find_nearest_index(player.position)
         if current_index == -1:
-            # Pos fora do path apos recalculo - nao deve ocorrer
             self._current_path = []
             return False
 
@@ -227,7 +230,6 @@ class CavebotScript(BaseScript):
             next_step = self._current_path[next_index]
             return self._move_player(player.position, next_step, bot_engine)
 
-        # Player ja esta no ultimo no do path
         self._current_path = []
         return False
 
@@ -240,6 +242,8 @@ class CavebotScript(BaseScript):
 
     # ------------------------------------------------------------------
     # Movimento
+    # BUG-G FIX: usa bot_engine.injector (property publica)
+    #            ao inves de bot_engine._injector (atributo privado)
     # ------------------------------------------------------------------
 
     def _move_player(self, current_pos: Position, next_step: Position, bot_engine: Any) -> bool:
@@ -250,7 +254,7 @@ class CavebotScript(BaseScript):
         vk_code = self._direction_to_key(dx, dy)
         if vk_code:
             self._log.debug(f"Andando para X:{next_step.x} Y:{next_step.y}")
-            bot_engine._injector.send_key_background(vk_code)
+            bot_engine.injector.send_key_background(vk_code)
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
             return True
@@ -266,7 +270,7 @@ class CavebotScript(BaseScript):
 
         vk_code = self._direction_to_key(dx, dy)
         if vk_code:
-            bot_engine._injector.send_key_background(vk_code)
+            bot_engine.injector.send_key_background(vk_code)
             self._last_move_time = time.time()
             time.sleep(self.config["step_delay"])
             return True
@@ -354,7 +358,7 @@ class CavebotScript(BaseScript):
             time.sleep(2)
         elif action.startswith("say:"):
             msg = action.split(":", 1)[1]
-            bot_engine._injector.cast_spell(msg)
+            bot_engine.injector.cast_spell(msg)
             self._log.info(f"Dizendo: {msg}")
 
     # ------------------------------------------------------------------
