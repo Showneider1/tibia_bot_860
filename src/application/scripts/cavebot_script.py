@@ -15,8 +15,13 @@ Historico de correcoes:
              Corrigido com cooldown baseado em timestamp (_last_step_time).
   BUG-SENDINPUT: send_key_background + win32con falha com WinError 87 em contextos
              sem desktop interativo e nao funciona em background.
-             Substituido por MemoryWalker (WriteProcessMemory) nos enderecos
-             go_to_x/y/z + tiles_to_go, identico ao metodo do ElfBot/XenoBot.
+             Substituido por MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP)
+             identico ao metodo do ElfBot/XenoBot.
+  BUG-WALKTO: _move_player chamava walk_to(next_step) com apenas 1 argumento.
+             memory_walker.walk_to exige (current, destination).
+             Com 1 arg: current=next_step, destination ausente -> TypeError ou
+             dx=0,dy=0 -> sem movimento apesar do log indicar andando.
+             Corrigido: walk_to(current_pos, next_step).
 """
 import time
 from typing import Dict, Any, List, Optional
@@ -99,7 +104,7 @@ class CavebotScript(BaseScript):
         """
         Chamado a cada tick pelo ScriptEngine.
         Cooldown entre passos via _last_step_time (sem time.sleep).
-        Movimento via MemoryWalker (WriteProcessMemory) - sem teclado.
+        Movimento via MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP) - sem foco.
         """
         player: Player = context.get("player")
         creatures: List[Creature] = context.get("creatures", [])
@@ -277,22 +282,25 @@ class CavebotScript(BaseScript):
         return self._current_path[-1].distance_chebyshev(target_pos) > 2
 
     # ------------------------------------------------------------------
-    # Movimento via MemoryWalker (WriteProcessMemory)
-    # BUG-SENDINPUT FIX: sem teclado, sem win32con, sem foco de janela.
+    # Movimento via MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP)
+    # BUG-WALKTO FIX: walk_to requer (current, destination) - dois argumentos.
     # ------------------------------------------------------------------
 
     def _move_player(
         self, current_pos: Position, next_step: Position, bot_engine: Any
     ) -> bool:
         """
-        Envia um passo via bot_engine.walker.walk_to().
-        Escreve go_to_x/y/z + tiles_to_go diretamente na memoria do processo.
+        Envia um passo via bot_engine.walker.walk_to(current_pos, next_step).
+
+        CORRECAO BUG-WALKTO:
+          Antes: walk_to(next_step)          <- 1 argumento, dx=0/dy=0, sem movimento
+          Agora: walk_to(current_pos, next_step) <- correto, direcao calculada ok
         """
         self._log.debug(
             f"Andando: ({current_pos.x},{current_pos.y}) -> "
             f"({next_step.x},{next_step.y})"
         )
-        ok = bot_engine.walker.walk_to(next_step)
+        ok = bot_engine.walker.walk_to(current_pos, next_step)
         if ok:
             self._last_move_time = time.time()
             self._last_step_time = time.time()
