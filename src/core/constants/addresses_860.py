@@ -5,7 +5,8 @@ Fonte: https://github.com/ianobermiller/tibiaapi/blob/master/tibiaapi/Addresses/
 
 from src.core.value_objects.address import MemoryAddress
 
-PROCESS_NAME = "Kaldrox Old Client.exe"
+# Nome real do processo detectado via diagnose_memory.py / Cheat Engine
+PROCESS_NAME = "Not Open.exe"
 
 # Base: Player.Experience = 0x63FE8C
 PLAYER_BASE_EXP = MemoryAddress(0x63FE8C)
@@ -26,13 +27,13 @@ PLAYER = {
     "capacity":      PLAYER_BASE_EXP.with_offset(-36),   # 0x63FE68 (Experience - 36)
     "name":          PLAYER_BASE_EXP.with_offset(-50),   # 0x63FE5C (Experience - 50) - TODO: Verify correct offset
     "flags":         PLAYER_BASE_EXP.with_offset(-108),  # 0x63FE20 (Experience - 108)
-    
+
     # === NOVOS ENDEREÇOS REAIS DE POSIÇÃO ===
     "pos_x": MemoryAddress(0x640958),
     "pos_y": MemoryAddress(0x640954),
     "pos_z": MemoryAddress(0x640950),
     # ========================================
-    
+
     # Endereços de skills
     "fist_percent": MemoryAddress(0x63FE24),
 }
