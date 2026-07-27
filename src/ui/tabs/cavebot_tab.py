@@ -403,7 +403,7 @@ class CavebotTab(ctk.CTkFrame):
                 corner_radius=8,
                 fg_color=COLORS["accent"] if is_center else COLORS["bg_input"],
                 hover_color=COLORS["accent_hover"] if is_center else COLORS["bg_hover"],
-                text_color=COLORS["text_inverse"] if is_center else COLORS["text_label"],
+                text_color=COLORS["text_primary"] if is_center else COLORS["text_label"],
                 border_width=0 if is_center else 1,
                 border_color=COLORS["border"],
                 command=lambda dx=dx, dy=dy: self._add_by_position(dx, dy),
