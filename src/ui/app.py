@@ -1,6 +1,5 @@
 """
 Janela principal do TibiaBot 860 UI.
-Layout: sidebar esquerda + area de conteudo com abas.
 """
 import threading
 import time
@@ -16,28 +15,27 @@ from src.ui.widgets.log_panel import LogPanel
 
 
 class BotApp:
-    """Controlador principal da interface."""
-
     def __init__(self):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
 
         self.root = ctk.CTk()
         self.root.title("TibiaBot 860")
-        self.root.geometry("1100x720")
-        self.root.minsize(900, 600)
+        self.root.geometry("1140x740")
+        self.root.minsize(900, 620)
         self.root.configure(fg_color=COLORS["bg_dark"])
 
-        # Estado do bot (sera substituido pela integracao real)
         self.bot_running = False
         self.bot_engine = None
+
+        # Mock — valores SEMPRE respeitam o maximo
         self._mock_player = {
             "name": "Specter Um",
             "level": 109,
             "vocation": "Elder Druid",
             "hp": 690, "hp_max": 690,
             "mana": 2985, "mana_max": 3065,
-            "x": 32337, "y": 31786, "z": 7,
+            "x": 32337, "y": 31790, "z": 7,
             "stamina": 2520,
             "capacity": 76450,
         }
@@ -46,21 +44,17 @@ class BotApp:
         self._bind_events()
 
     def _build_ui(self):
-        # Layout principal: sidebar | conteudo
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
-        # Sidebar
         self.sidebar = Sidebar(self.root, self)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
 
-        # Area de conteudo
         self._content = ctk.CTkFrame(self.root, fg_color=COLORS["bg_dark"], corner_radius=0)
         self._content.grid(row=0, column=1, sticky="nsew")
         self._content.grid_rowconfigure(0, weight=1)
         self._content.grid_columnconfigure(0, weight=1)
 
-        # Abas
         self._tabs = {
             "status":   StatusTab(self._content, self),
             "healing":  HealingTab(self._content, self),
@@ -70,7 +64,6 @@ class BotApp:
         for tab in self._tabs.values():
             tab.grid(row=0, column=0, sticky="nsew")
 
-        # Log panel na parte inferior
         self.log_panel = LogPanel(self.root)
         self.log_panel.grid(row=1, column=0, columnspan=2, sticky="ew")
 
@@ -95,15 +88,14 @@ class BotApp:
             self._start_mock_updates()
 
     def _start_mock_updates(self):
-        """Simula atualizacoes de estado ate o bot real ser integrado."""
+        """Simula variacoes de HP/Mana dentro dos limites corretos."""
         def _loop():
             import random
             while self.bot_running:
                 p = self._mock_player
-                p["hp"] = max(100, p["hp"] - random.randint(-30, 5))
-                p["mana"] = max(200, p["mana"] - random.randint(-50, 10))
-                p["x"] += random.randint(-1, 1)
-                p["y"] += random.randint(-1, 1)
+                # Clamp: nunca ultrapassa o maximo nem vai abaixo de 1
+                p["hp"]   = max(1, min(p["hp_max"],   p["hp"]   + random.randint(-20, 15)))
+                p["mana"] = max(1, min(p["mana_max"], p["mana"] + random.randint(-30, 20)))
                 self.root.after(0, self._tabs["status"].refresh)
                 time.sleep(1.5)
         threading.Thread(target=_loop, daemon=True).start()
