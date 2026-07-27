@@ -55,12 +55,15 @@ class PlayerReader:
             stamina     = self._memory.read_int(self._addresses.get("stamina",     addr_id))
             capacity    = self._memory.read_int(self._addresses.get("capacity",    addr_id))
 
-            # Vocacao
+            # Vocacao -- CORRECAO: ler 1 byte com read_byte, nao read_int
+            # O endereco 0x63FE21 armazena apenas 1 byte para vocacao.
+            # Usar read_int (4 bytes) contamina o valor com bytes adjacentes
+            # resultando em numeros invalidos como 64 (0x40).
             vocation = "Unknown"
             addr_voc = self._addresses.get("vocation")
             if addr_voc:
                 try:
-                    voc_id   = self._memory.read_int(addr_voc)
+                    voc_id   = self._memory.read_byte(addr_voc)
                     vocation = VOCATIONS.get(voc_id, f"Unknown({voc_id})")
                 except Exception:
                     pass
