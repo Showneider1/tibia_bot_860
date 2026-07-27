@@ -1,10 +1,12 @@
 import time
+import ctypes
+import ctypes.wintypes as wintypes
 import win32api
 import win32con
 import win32gui
 try:
-    import win32process  # necessário apenas em Windows; usado para resolver hwnd por PID
-except ImportError:  # pragma: no cover -ambiente Linux/dev sem pywin32
+    import win32process
+except ImportError:
     win32process = None
 from src.core.interfaces.injector_interface import ICommandInjector
 from src.infrastructure.logging.logger import get_logger
@@ -29,6 +31,16 @@ _VK_SCAN_MAP = {
     win32con.VK_RETURN:  (0x1C, False),
 }
 
+# user32 via ctypes para SendMessage sincrono
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_user32.SendMessageW.argtypes = [
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+]
+_user32.SendMessageW.restype = ctypes.c_long
+
 
 def _make_lparam(vk_code: int, key_up: bool = False) -> int:
     """
@@ -47,22 +59,21 @@ def _make_lparam(vk_code: int, key_up: bool = False) -> int:
     if entry:
         scancode, extended = entry
     else:
-        # Fallback: usa MapVirtualKey para obter o scancode
         scancode = win32api.MapVirtualKey(vk_code, 0) & 0xFF
         extended = False
 
-    lParam = 1                          # repeat count
-    lParam |= (scancode & 0xFF) << 16   # scan code
+    lParam = 1
+    lParam |= (scancode & 0xFF) << 16
     if extended:
-        lParam |= (1 << 24)             # extended key
+        lParam |= (1 << 24)
     if key_up:
-        lParam |= (1 << 30)             # previous state: down
-        lParam |= (1 << 31)             # transition: key released
+        lParam |= (1 << 30)
+        lParam |= (1 << 31)
     return lParam
 
 
 class KeyboardInjector(ICommandInjector):
-    """Injecao de comandos via PostMessage para rodar em background."""
+    """Injecao de comandos via SendMessage/PostMessage para o cliente Tibia."""
 
     def __init__(
         self,
@@ -70,14 +81,11 @@ class KeyboardInjector(ICommandInjector):
         process_id: int | None = None,
     ) -> None:
         """
-        Injetor de teclas via PostMessage.
+        Injetor de teclas.
 
-        Resolução da janela alvo (ordem):
-          1. process_id (se fornecido) — mais robusto, independe do título
-          2. window_title_hint (fallback) — mantém compat com Tibia clássico
-
-        Para o cliente Kaldrox, cujo título não contém "tibia", o caminho
-        por PID é o único confiável.
+        Resolucao da janela alvo (ordem):
+          1. process_id (se fornecido) - mais robusto, independe do titulo
+          2. window_title_hint (fallback) - mantem compat com Tibia classico
         """
         self._window_title_hint = window_title_hint
         self._process_id = process_id
@@ -85,11 +93,11 @@ class KeyboardInjector(ICommandInjector):
         self._log = get_logger("KeyboardInjector")
 
     # ------------------------------------------------------------------
-    # Resolução de janela
+    # Resolucao de janela
     # ------------------------------------------------------------------
 
     def _find_window_by_pid(self, pid: int) -> bool:
-        """Localiza a janela visível cujo processo dono tem o PID informado."""
+        """Localiza a janela visivel cujo processo dono tem o PID informado."""
         if win32process is None:
             return False
         result: list[int] = []
@@ -117,7 +125,7 @@ class KeyboardInjector(ICommandInjector):
         return False
 
     def _find_window_by_title(self) -> bool:
-        """Localiza a janela visível cujo título contém o hint (case-insensitive)."""
+        """Localiza a janela visivel cujo titulo contem o hint (case-insensitive)."""
         result: list[int] = []
 
         def callback(hwnd, _):
@@ -135,34 +143,34 @@ class KeyboardInjector(ICommandInjector):
 
         if result:
             self._hwnd = result[0]
-            self._log.debug(f"Janela encontrada por título: hwnd={self._hwnd}")
+            self._log.debug(f"Janela encontrada por titulo: hwnd={self._hwnd}")
             return True
         return False
 
     def _find_window(self) -> bool:
         """
         Tenta localizar a janela do cliente. Ordem:
-          1. por process_id (mais robusto)        — usado pelo Kaldrox
-          2. por título (fallback)                — Tibia clássico
+          1. por process_id (mais robusto)   - usado pelo Kaldrox
+          2. por titulo (fallback)           - Tibia classico
         Retorna True se encontrou.
         """
         if self._process_id is not None:
             if self._find_window_by_pid(self._process_id):
                 return True
             self._log.debug(
-                f"PID {self._process_id} não mapeou a uma janela visível; caindo para título."
+                f"PID {self._process_id} nao mapeou a uma janela visivel; caindo para titulo."
             )
         if self._find_window_by_title():
             return True
-        self._log.warning("Janela do cliente não encontrada.")
+        self._log.warning("Janela do cliente nao encontrada.")
         return False
 
     # ------------------------------------------------------------------
-    # API pública (compatível com versão anterior)
+    # API publica
     # ------------------------------------------------------------------
 
     def set_process_id(self, process_id: int | None) -> None:
-        """Atualiza o PID e invalida hwnd em cache — útil se o jogador relogar."""
+        """Atualiza o PID e invalida hwnd em cache."""
         self._process_id = process_id
         self._hwnd = None
 
@@ -179,12 +187,16 @@ class KeyboardInjector(ICommandInjector):
 
     def send_key_background(self, vk_code: int) -> None:
         """
-        Envia tecla ao cliente Tibia em background via PostMessage.
+        Envia tecla ao cliente Tibia.
 
-        BUG-H CORRIGIDO: lParam=0 era ignorado pelo Tibia 8.60.
-        O cliente verifica o scancode (bits 16-23) e o extended key
-        flag (bit 24) no lParam. _make_lparam() monta o valor correto
-        para cada vk_code, incluindo setas (extended=True) e numpad.
+        Tibia 8.60 processa movimento via GetKeyState/GetAsyncKeyState,
+        que leem o estado fisico — PostMessage e assincrono e nao atualiza
+        esse estado, sendo ignorado para movimento.
+
+        Solucao: WM_KEYDOWN via SendMessage (sincrono — aguarda o cliente
+        processar antes de retornar) + WM_KEYUP via PostMessage.
+        Isso garante que o cliente registre o movimento sem exigir foco
+        exclusivo da janela.
         """
         if not self._hwnd and not self._find_window():
             self._log.warning("Janela do cliente nao encontrada.")
@@ -193,9 +205,16 @@ class KeyboardInjector(ICommandInjector):
         lp_down = _make_lparam(vk_code, key_up=False)
         lp_up   = _make_lparam(vk_code, key_up=True)
 
-        win32gui.PostMessage(self._hwnd, win32con.WM_KEYDOWN, vk_code, lp_down)
+        # WM_KEYDOWN: SendMessage (sincrono) — cliente processa antes de retornar
+        _user32.SendMessageW(
+            self._hwnd,
+            win32con.WM_KEYDOWN,
+            vk_code,
+            lp_down,
+        )
         time.sleep(0.02)
-        win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP,   vk_code, lp_up)
+        # WM_KEYUP: PostMessage (assincrono) — suficiente para liberar a tecla
+        win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP, vk_code, lp_up)
 
     def _send_text_background(self, text: str) -> None:
         """Digita texto em background (para magias)."""
