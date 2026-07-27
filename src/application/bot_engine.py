@@ -33,17 +33,8 @@ class BotEngine:
       - Ler dados do player e criaturas a cada tick
       - Disparar eventos (HP baixo, level up, criatura detectada...)
       - Executar scripts registrados no ScriptEngine
-
-    Uso tipico:
-        engine = BotEngine(pm, mr, ki, PLAYER, BATTLE_LIST, CREATURE)
-        engine.start()
-        while True:
-            engine.tick()
-            time.sleep(0.1)
     """
 
-    # Numero de ticks consecutivos com HP/Mana baixo antes de re-emitir o evento.
-    # Evita spam de eventos a cada tick quando o player esta com vida baixa.
     _HEALTH_EVENT_DEBOUNCE = 10
     _MAX_RETRY_ATTEMPTS = 5
 
@@ -82,8 +73,6 @@ class BotEngine:
         self._last_creatures: List[Creature] = []
 
         self._connected: bool = False
-
-        # Contadores para reconexao e debounce de eventos
         self._connection_retry_count: int = 0
         self._health_low_ticks: int = 0
         self._mana_low_ticks: int = 0
@@ -104,7 +93,6 @@ class BotEngine:
             self._connection_retry_count = 0
             self._log.info("Bot conectado ao processo Tibia.")
             self._log.info(f"Script Engine pronto ({len(self.script_engine.list_scripts())} scripts).")
-            self._log.info("Auto-heal e Auto-attack desabilitados por padrao (use bot.enabled = True).")
             return True
 
         except Exception as e:
@@ -142,7 +130,7 @@ class BotEngine:
             self._log.debug(f"Tick lento: {elapsed:.1f}ms")
 
     def run_loop(self, interval: float = 0.1) -> None:
-        """Loop autonomo — usa tick() internamente com controle de tempo."""
+        """Loop autonomo com controle de tempo."""
         self._log.info("BotEngine loop iniciado.")
         try:
             while True:
@@ -156,16 +144,16 @@ class BotEngine:
             self.stop()
 
     # ------------------------------------------------------------------
-    # Leitura de estado (CORRIGIDO: metodo dentro da classe)
+    # Leitura de estado
     # ------------------------------------------------------------------
 
     def _update_state(self) -> None:
         """
-        Le a memoria do processo e atualiza self.player e self.creatures.
+        Le a memoria e atualiza self.player e self.creatures.
 
-        Apos ler o player via PlayerReader, busca o player na lista de
-        criaturas para sincronizar a posicao com maior precisao (a posicao
-        na BattleList e mais confiavel que o endereco direto).
+        Apos ler o player via PlayerReader, busca o player na BattleList
+        para sincronizar posicao E nome reais (mais confiaveis que os
+        enderecos estaticos).
         """
         self._last_player = self.player
         self._last_creatures = list(self.creatures)
@@ -174,11 +162,15 @@ class BotEngine:
             self.player = self._player_reader.get_player()
             self.creatures = self._creature_reader.get_creatures()
 
-            # Sincroniza posicao do player com a BattleList
+            # Sincroniza posicao e nome com os dados da BattleList
             if self.player and self.creatures:
                 for creature in self.creatures:
                     if creature.id == self.player.id:
                         self.player.position = creature.position
+                        # Sobreescreve nome apenas se a BattleList
+                        # trouxer algo valido (nao 'Unknown' e nao vazio)
+                        if creature.name and creature.name not in ("Unknown", ""):
+                            self.player.name = creature.name
                         break
 
         except Exception as e:
@@ -187,13 +179,10 @@ class BotEngine:
     def _check_and_reconnect(self) -> bool:
         """
         Testa a conexao lendo um endereco de referencia.
-        Se falhar, incrementa o contador e tenta reconectar.
-
-        Returns:
-            True se a conexao esta ativa, False caso contrario.
+        Retorna True se conectado, False se falha.
         """
         try:
-            self._memory.read_int(MemoryAddress(0x63FE8C), use_cache=False)
+            self._memory.read_int(MemoryAddress(0x63FE8C))
             self._connection_retry_count = 0
             return True
         except Exception:
@@ -219,15 +208,13 @@ class BotEngine:
         if not self.player:
             return
 
-        # Primeiro carregamento
         if self._last_player is None:
             self._log.info(
-                f"Player carregado: ID={self.player.id} "
+                f"Player carregado: ID={self.player.id} Name='{self.player.name}' "
                 f"HP={self.player.stats.health}/{self.player.stats.max_health}"
             )
             self.event_manager.emit(EventType.PLAYER_LOADED, player=self.player)
 
-        # HP baixo — com debounce para nao spammar
         if self.player.hp_percent() < 30:
             self._health_low_ticks += 1
             if self._health_low_ticks == 1 or self._health_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0:
@@ -235,7 +222,6 @@ class BotEngine:
         else:
             self._health_low_ticks = 0
 
-        # Mana baixa — com debounce
         if self.player.mana_percent() < 20:
             self._mana_low_ticks += 1
             if self._mana_low_ticks == 1 or self._mana_low_ticks % self._HEALTH_EVENT_DEBOUNCE == 0:
@@ -243,12 +229,10 @@ class BotEngine:
         else:
             self._mana_low_ticks = 0
 
-        # Level up
         if self._last_player and self.player.level > self._last_player.level:
             self._log.info(f"Level Up! {self._last_player.level} -> {self.player.level}")
             self.event_manager.emit(EventType.LEVEL_UP, player=self.player)
 
-        # Novas criaturas
         last_ids = {c.id for c in self._last_creatures}
         for creature in self.creatures:
             if creature.id not in last_ids:
