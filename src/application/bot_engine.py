@@ -63,14 +63,13 @@ class BotEngine:
         self._injector = keyboard_injector
 
         # MemoryWriter: se nao fornecido, cria usando o mesmo process_manager.
-        # Parametro opcional para nao quebrar instanciacoes existentes.
         if memory_writer is None:
             memory_writer = MemoryWriter(process_manager)
         self._memory_writer = memory_writer
 
-        # WindowWalker: usa PostMessage(WM_KEYDOWN/WM_KEYUP) no HWND do Tibia.
-        # memory_writer passado por compatibilidade (ignorado internamente).
-        self._walker = MemoryWalker(self._memory_writer)
+        # MemoryWalker v3: usa SendInput via KeyboardInjector.
+        # O injector e injetado em start() apos o PID ser configurado.
+        self._walker = MemoryWalker()
 
         self._player_reader = PlayerReader(self._memory, player_addresses)
         self._creature_reader = CreatureReader(
@@ -114,8 +113,9 @@ class BotEngine:
     @property
     def walker(self) -> MemoryWalker:
         """
-        WindowWalker para movimento via PostMessage(WM_KEYDOWN/WM_KEYUP).
-        Interface identica ao MemoryWalker anterior: walk_to / cooldown_passed / reset.
+        MemoryWalker v3: movimento via SendInput + KEYEVENTF_SCANCODE.
+        Delega para KeyboardInjector.send_key_background(vk).
+        Interface publica: walk_to / cooldown_passed / reset.
         """
         return self._walker
 
@@ -125,7 +125,7 @@ class BotEngine:
         return self._memory_writer
 
     # ------------------------------------------------------------------
-    # Resolucao de HWND para o WindowWalker
+    # Resolucao de HWND (mantida para cast_spell / focus_client)
     # ------------------------------------------------------------------
 
     def _resolve_hwnd(self, pid: int) -> Optional[int]:
@@ -159,8 +159,6 @@ class BotEngine:
             self._log.debug(f"HWND resolvido via PID={pid}: {hwnd:#010x}")
             return hwnd
 
-        # Fallback por titulo
-        hwnd_fallback = win32gui.FindWindow(None, None)
         result2: list[int] = []
 
         def callback2(hwnd, _):
@@ -212,7 +210,7 @@ class BotEngine:
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """Conecta ao processo do Tibia, inicializa leitores e propaga HWND ao walker."""
+        """Conecta ao processo do Tibia e inicializa todos os componentes."""
         try:
             if not self._pm.is_running():
                 if not self._pm.attach():
@@ -224,20 +222,29 @@ class BotEngine:
 
             pid = getattr(self._pm, "process_id", None)
             if pid is not None:
-                # Propaga PID ao KeyboardInjector (SendInput)
+                # Propaga PID ao KeyboardInjector (SendInput + cast_spell)
                 try:
                     self._injector.set_process_id(pid)
                 except Exception as e:
                     self._log.debug(f"Nao foi possivel setar PID no injector: {e}")
 
-                # Propaga HWND ao WindowWalker para PostMessage direto
+                # Injeta KeyboardInjector no MemoryWalker v3 (SendInput)
+                # Deve ocorrer APOS set_process_id para garantir PID configurado.
+                self._walker.set_injector(self._injector)
+                self._log.debug("KeyboardInjector injetado no MemoryWalker.")
+
+                # Propaga HWND ao KeyboardInjector para focus_client / cast_spell
                 hwnd = self._resolve_hwnd(pid)
                 if hwnd:
-                    self._walker.set_hwnd(hwnd)
+                    try:
+                        self._injector._hwnd = hwnd
+                        self._log.debug(f"HWND={hwnd:#010x} propagado ao injector.")
+                    except Exception:
+                        pass
                 else:
                     self._log.warning(
                         "HWND nao encontrado para PID=%d; "
-                        "walker fara EnumWindows no primeiro walk_to.", pid
+                        "cast_spell fara EnumWindows no primeiro uso.", pid
                     )
 
             self._log.info("Bot conectado ao processo Tibia.")
