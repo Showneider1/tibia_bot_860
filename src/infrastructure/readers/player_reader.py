@@ -1,5 +1,22 @@
 """
 Leitor de dados do Player na memoria do cliente Tibia.
+
+CORREÇÃO POSIÇÃO (BUG-POS-B):
+  go_to_x/y/z (PLAYER_EXTRA) representa o destino do movimento interno do
+  cliente, NÃO o tile atual do player. Em Tibia 8.60, a posição real fica
+  nos offsets x/y/z da entrada do player na BattleList.
+
+  Novo fluxo:
+    1. Lê player_id de PLAYER["id"]
+    2. Itera BattleList procurando slot com id == player_id
+    3. Usa as coordenadas x/y/z desse slot como position
+    4. Fallback para go_to_x/y/z se BattleList não encontrar o player
+
+  CORREÇÃO API (BUG-POS-B2):
+    MemoryAddress é um dataclass com atributo .value (não .address).
+    read_int() recebe MemoryAddress diretamente; internamente chama
+    _get_real_address(addr) que acessa addr.value.
+    _get_position_from_battlelist() monta MemoryAddress(int) corretamente.
 """
 from typing import Dict, Optional
 
@@ -9,7 +26,7 @@ from src.core.value_objects.stats import Stats
 from src.infrastructure.memory.memory_reader import MemoryReader
 from src.core.value_objects.address import MemoryAddress
 from src.core.exceptions.memory_exceptions import MemoryReadError
-from src.core.constants.addresses_860 import VOCATIONS
+from src.core.constants.addresses_860 import VOCATIONS, BATTLE_LIST, CREATURE
 from src.infrastructure.logging.logger import get_logger
 
 
@@ -20,6 +37,77 @@ class PlayerReader:
         self._memory = memory_reader
         self._addresses = addresses
         self._log = get_logger("PlayerReader")
+
+    # ------------------------------------------------------------------
+    # Posição via BattleList
+    # ------------------------------------------------------------------
+
+    def _get_position_from_battlelist(self, player_id: int) -> Optional[Position]:
+        """
+        Busca a posição real do player na BattleList.
+
+        Tibia 8.60: a posição real (tile atual) está nos offsets
+        CREATURE["x"]=36, CREATURE["y"]=40, CREATURE["z"]=44
+        dentro do slot cuja id == player_id.
+
+        MemoryAddress(int) é o construtor correto — o atributo do dataclass
+        é .value, usado internamente por MemoryReader._get_real_address().
+        """
+        try:
+            base_addr   = BATTLE_LIST["start"].value   # int: 0x63FEF8
+            step        = BATTLE_LIST["step"]           # int: 0xA8
+            max_entries = BATTLE_LIST["max_creatures"]  # int: 250
+
+            off_id = CREATURE["id"]  # 0
+            off_x  = CREATURE["x"]  # 36
+            off_y  = CREATURE["y"]  # 40
+            off_z  = CREATURE["z"]  # 44
+
+            for i in range(max_entries):
+                slot_base = base_addr + i * step
+
+                slot_id = self._memory.read_int(
+                    MemoryAddress(slot_base + off_id)
+                )
+                if slot_id != player_id:
+                    continue
+
+                # Encontrou o slot do player
+                px = self._memory.read_int(MemoryAddress(slot_base + off_x))
+                py = self._memory.read_int(MemoryAddress(slot_base + off_y))
+                pz = self._memory.read_int(MemoryAddress(slot_base + off_z))
+
+                if px > 0 and py > 0:
+                    return Position(x=px, y=py, z=pz)
+
+                return None  # slot encontrado mas coordenadas inválidas
+
+        except Exception as e:
+            self._log.debug(f"Falha ao ler posicao via BattleList: {e}")
+        return None
+
+    def _get_position_fallback(self) -> Position:
+        """
+        Fallback: lê go_to_x/y/z (PLAYER_EXTRA).
+        Usado apenas se BattleList não retornar posição válida.
+        """
+        addr_gx = self._addresses.get("go_to_x")
+        addr_gy = self._addresses.get("go_to_y")
+        addr_gz = self._addresses.get("go_to_z")
+        if addr_gx and addr_gy and addr_gz:
+            try:
+                px = self._memory.read_int(addr_gx, use_cache=False)
+                py = self._memory.read_int(addr_gy, use_cache=False)
+                pz = self._memory.read_int(addr_gz, use_cache=False)
+                if px > 0 and py > 0:
+                    return Position(x=px, y=py, z=pz)
+            except Exception as e:
+                self._log.debug(f"Falha ao ler go_to_x/y/z (fallback): {e}")
+        return Position(x=0, y=0, z=0)
+
+    # ------------------------------------------------------------------
+    # Leitura principal
+    # ------------------------------------------------------------------
 
     def get_player(self) -> Optional[Player]:
         """Le os enderecos de memoria e constroi a entidade Player."""
@@ -55,10 +143,7 @@ class PlayerReader:
             stamina     = self._memory.read_int(self._addresses.get("stamina",     addr_id))
             capacity    = self._memory.read_int(self._addresses.get("capacity",    addr_id))
 
-            # Vocacao -- CORRECAO: ler 1 byte com read_byte, nao read_int
-            # O endereco 0x63FE21 armazena apenas 1 byte para vocacao.
-            # Usar read_int (4 bytes) contamina o valor com bytes adjacentes
-            # resultando em numeros invalidos como 64 (0x40).
+            # Vocacao — lê 1 byte (read_int contamina com bytes adjacentes)
             vocation = "Unknown"
             addr_voc = self._addresses.get("vocation")
             if addr_voc:
@@ -68,9 +153,7 @@ class PlayerReader:
                 except Exception:
                     pass
 
-            # Nome -- placeholder ate o bot_engine sincronizar com a BattleList
-            # O bot_engine._update_state sobrescreve com o nome real da BattleList
-            # assim que encontrar creature.id == player.id
+            # Nome — placeholder ate bot_engine sincronizar com a BattleList
             player_name = "Carregando..."
             addr_name = self._addresses.get("name")
             if addr_name:
@@ -81,26 +164,19 @@ class PlayerReader:
                 except Exception:
                     pass
 
-            # Posicao real do player: leitura direta de go_to_x/y/z (PLAYER_EXTRA).
-            # Em Tibia 8.60 clássico, esses endereços guardam a posição ATUAL do
-            # player quando parado, e a posição-alvo quando andando. É o padrão
-            # usado por Elfbot/Xenobot e confirmado em Tibia Address API.txt.
-            # Fallback (0,0,0) caso os endereços não estejam disponíveis ou
-            # falhem na leitura — a sincronização via BattleList no bot_engine
-            # ainda pode sobrescrever depois.
-            position = Position(x=0, y=0, z=0)
-            addr_gx = self._addresses.get("go_to_x")
-            addr_gy = self._addresses.get("go_to_y")
-            addr_gz = self._addresses.get("go_to_z")
-            if addr_gx and addr_gy and addr_gz:
-                try:
-                    px = self._memory.read_int(addr_gx, use_cache=False)
-                    py = self._memory.read_int(addr_gy, use_cache=False)
-                    pz = self._memory.read_int(addr_gz, use_cache=False)
-                    if px > 0 and py > 0:
-                        position = Position(x=px, y=py, z=pz)
-                except Exception as e:
-                    self._log.debug(f"Falha ao ler go_to_x/y/z: {e}")
+            # ----------------------------------------------------------
+            # Posição: BattleList (fonte primária) → go_to_x/y/z (fallback)
+            #
+            # BUG-POS-B FIX: go_to_x/y/z é o destino do movimento do cliente,
+            # não o tile atual. A posição real está na BattleList, slot cuja
+            # id == player_id, offsets x=36 / y=40 / z=44.
+            # ----------------------------------------------------------
+            position = self._get_position_from_battlelist(player_id)
+            if position is None:
+                self._log.debug(
+                    "Posicao via BattleList indisponivel; usando go_to_x/y/z como fallback."
+                )
+                position = self._get_position_fallback()
 
             player = Player(
                 id=player_id,
@@ -132,7 +208,8 @@ class PlayerReader:
             self._log.debug(
                 f"Player: ID={player.id} Name='{player.name}' "
                 f"Level={player.level} Voc='{player.vocation}' "
-                f"HP={player.stats.health}/{player.stats.max_health}"
+                f"HP={player.stats.health}/{player.stats.max_health} "
+                f"Pos=({position.x},{position.y},{position.z})"
             )
             return player
 
