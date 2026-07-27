@@ -77,9 +77,20 @@ class BotEngine:
         self._health_low_ticks: int = 0
         self._mana_low_ticks: int = 0
 
-        # F1.3 — ProfileManager injetado via set_profile_manager() para evitar
+        # F1.3 - ProfileManager injetado via set_profile_manager() para evitar
         # import circular (BotEngine nao importa ProfileManager diretamente).
         self._profile_manager = None
+
+    # ------------------------------------------------------------------
+    # Property publica para o injector
+    # BUG-G FIX: scripts acessavam self._injector diretamente.
+    # Agora usam bot_engine.injector (acesso seguro e encapsulado).
+    # ------------------------------------------------------------------
+
+    @property
+    def injector(self) -> KeyboardInjector:
+        """Retorna o KeyboardInjector para uso pelos scripts."""
+        return self._injector
 
     # ------------------------------------------------------------------
     # Integracao com ProfileManager (F1.3)
@@ -181,7 +192,7 @@ class BotEngine:
         """
         Le a memoria e atualiza self.player e self.creatures.
 
-        F1.2 — Apos ler o player, propaga player.vocation para
+        F1.2 - Apos ler o player, propaga player.vocation para
         engine.config["player_vocation"] quando a vocacao for valida
         (diferente de 'Unknown', 'Auto', vazio ou None).
 
@@ -196,7 +207,7 @@ class BotEngine:
             self.player = self._player_reader.get_player()
             self.creatures = self._creature_reader.get_creatures()
 
-            # F1.2 — Propaga vocacao real lida da memoria para engine.config.
+            # F1.2 - Propaga vocacao real lida da memoria para engine.config.
             # Guard triplo: nao vazio, nao 'Auto' (placeholder), nao 'Unknown*'.
             if self.player and self.player.vocation not in ("Unknown", "Auto", "", None):
                 if not str(self.player.vocation).startswith("Unknown("):
