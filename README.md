@@ -1,107 +1,144 @@
-# Tibia Bot 8.60
+# TibiaBot 860
 
-Bot para Tibia 8.60 (cliente/custom OT) com leitura de memória, injeção de
-comandos via SendInput, motor de scripts e IA de pathfinding/combate.
-
-## Status atual
-
-| Camada | Estado |
-|---|---|
-| Leitura de memória (memória protegida via `ReadProcessMemory`) | funcional, com cache TTL |
-| Entity Layer (Player, Creature, Waypoint) | populadas |
-| Scripts (Healing, Aimbot, Cavebot, Looter) | populados |
-| Eventos (`EventManager` + `EventType` + handlers) | populados |
-| AI (A*, Behavior Tree, Combat AI, Threat Analyzer, Decision Maker) | populado em `src/ai/` |
-| UI (PySide6) | não implementada |
+Bot para Tibia 8.60 / servidores Kaldrox com interface grafica customtkinter.
 
 ## Requisitos
 
+- Windows (obrigatorio — usa Win32 API para leitura de memoria)
 - Python 3.10+
-- Windows (necessário para `pywin32`, `keyboard`, `pyautogui`)
-- Cliente Tibia 8.60 (ou compatível) — configuração padrão assume
-  `Kaldrox Client_BR Old.exe`
+- Tibia 8.60 ou servidor Kaldrox **aberto e logado**
+- Executar como **Administrador**
 
-## Instalação
+## Instalacao
 
 ```bash
+# 1. Clone o repositorio
+git clone https://github.com/Showneider1/tibia_bot_860.git
+cd tibia_bot_860
+
+# 2. Crie e ative o venv
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\activate
+
+# 3. Instale as dependencias
 pip install -r requirements.txt
 ```
 
-> Em Linux/macOS, apenas `psutil`, `pyyaml` e o tooling de dev rodam; os
-> adaptadores Windows permanecem fora.
-
-## Configuração
-
-Toda a configuração vive em `src/config/settings.yaml`. Edite esse
-arquivo para:
-
-- apontar para o `.exe` correto do cliente (`game.process_name`,
-  `game.window_title`);
-- ajustar thresholds de healing / aimbot;
-- configurar scripts de cave/loot.
-
-A classe `src.config.settings.Settings` carrega esse arquivo e
-expõe dot-access (`settings.get("scripts.healing.hp_threshold")`).
-
-## Uso
-
-### Modo interativo (recomendado para debug)
+## Como rodar
 
 ```bash
+# Interface grafica (recomendado)
+python gui.py
+
+# Bot headless (terminal)
 python -m src.main
 ```
 
-Comandos disponíveis dentro do REPL: `start`, `stop`, `status`, `exit`.
-
-### Exemplo: scripts registrados
-
-```bash
-python examples/bot_with_scripts.py
-```
-
-Carrega `HealingScript`, `AimbotScript`, `CavebotScript`, `LooterScript`,
-registra handlers de eventos e abre a janela do cliente (certifique-se
-de que o Tibia está em execução e logado).
-
-### Exemplo: testes de IA (pathfinding, BT, decisão)
-
-```bash
-python examples/test_phase3.py
-```
-
-Cobre A*, Threat Analyzer, Behavior Tree e Decision Maker sem
-precisar de cliente conectado.
+> **Atencao:** Execute sempre como Administrador. Sem permissao de Admin o
+> `OpenProcess` falha e o bot nao consegue ler a memoria do Tibia.
 
 ## Arquitetura
 
-Veja `docs/architecture.md` para o diagrama de camadas (core, ai,
-infrastructure, application, config).
+```
+tibia_bot_860/
+├── gui.py                          # Entry point da UI
+├── src/
+│   ├── ui/                         # Interface grafica (customtkinter)
+│   │   ├── app.py                  # Janela principal + integracao engine
+│   │   ├── theme.py                # Cores e fontes
+│   │   ├── tabs/                   # Abas: Status, Healing, Cavebot, Config
+│   │   └── widgets/                # Sidebar, LogPanel
+│   ├── application/
+│   │   ├── bot_engine.py           # Loop principal + eventos + scripts
+│   │   ├── events/                 # EventManager + EventType
+│   │   └── scripts/                # ScriptEngine
+│   ├── infrastructure/
+│   │   ├── memory/
+│   │   │   ├── memory_reader.py    # Leitura Win32 (suporte 32-bit)
+│   │   │   └── process_manager.py  # Handle do processo
+│   │   ├── readers/
+│   │   │   ├── player_reader.py    # Leitura dos dados do player
+│   │   │   └── creature_reader.py  # Leitura da BattleList
+│   │   └── injection/
+│   │       └── keyboard_injector.py
+│   └── core/
+│       ├── entities/               # Player, Creature
+│       ├── value_objects/          # Address, Position, Stats
+│       ├── constants/
+│       │   └── addresses_860.py    # Enderecos de memoria do cliente 8.60
+│       └── exceptions/
+└── requirements.txt
+```
 
-## Endereços de memória
+## Fluxo de dados
 
-Veja `docs/memory_addresses.md` para a tabela de offsets
-(player, battle list, criaturas, map pointer). Os scans parciais estão
-em `docs/research/`.
+```
+Tibia.exe (processo)
+    |
+    | ReadProcessMemory (Win32 API)
+    |
+MemoryReader  <--  ProcessManager (handle + base_address)
+    |
+    +-- PlayerReader   --> Player (hp, mana, posicao, stamina...)
+    +-- CreatureReader --> [Creature, ...] (BattleList)
+    |
+BotEngine.tick()
+    |
+    +-- _update_state()   -> atualiza self.player + self.creatures
+    +-- _process_events() -> emite eventos (HP baixo, level up...)
+    +-- _run_scripts()    -> executa scripts registrados
+    |
+BotApp.update_from_engine(player)
+    |
+    +-- StatusTab.refresh() -> atualiza UI (thread-safe via root.after)
+```
 
-## Hotkeys
+## Integracao UI + BotEngine
 
-- `insert` — habilita/desabilita o bot
-- `end` — parada de emergência
-- `Ctrl+C` — encerra o processo
+Por padrao a UI abre em modo demo (dados zerados, sem leitura de memoria).
+Para conectar ao jogo:
 
-## Troubleshooting
+```python
+from src.application.bot_engine import BotEngine
+from src.infrastructure.memory.process_manager import ProcessManager
+from src.infrastructure.memory.memory_reader import MemoryReader
+from src.infrastructure.injection.keyboard_injector import KeyboardInjector
+from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE
+from src.ui.app import BotApp
 
-- **`ModuleNotFoundError: src.X.Y`** — execute comandos a partir da
-  raiz do projeto (onde vive `src/`).
-- **Janela do cliente não encontrada** — confirme
-  `game.window_title` em `settings.yaml` (substring, case-insensitive).
-- **HP retornando zero** — Tibia provavelmente não está logado;
-  PlayerReader retorna `None` quando `id == 0`.
-- **Pathfinding lento** — habilite cache no `Pathfinder` e/ou aumente
-  `ai.pathfinding.max_iterations`.
+pm = ProcessManager()
+mr = MemoryReader(pm)
+ki = KeyboardInjector()
 
-## Licença
+engine = BotEngine(pm, mr, ki, PLAYER, BATTLE_LIST, CREATURE)
 
-MIT.
+app = BotApp()
+app.bot_engine = engine  # injeta antes de run()
+app.run()
+```
+
+Ao clicar em **INICIAR BOT** a UI chama `engine.start()`, anexa ao processo
+e inicia o loop de leitura em thread separada.
+
+## Changelog
+
+### v1.1.0 (2026-07-27)
+- **fix:** `_update_state` estava fora da classe `BotEngine` (bug de indentacao)
+  causando `AttributeError` silencioso em `tick()`
+- **fix:** `_connection_retry_count` e `_max_retry_attempts` nao inicializados
+- **fix:** import duplicado de `EventManager`/`EventType` removido
+- **fix:** `_player_data` (renomeado de `_mock_player`) propagado em todos os arquivos
+- **fix:** HP/Mana com clamp — nunca exibe valor maior que o maximo
+- **fix:** simulacao aleatoria de HP removida — dados so mudam com leitura real
+- **improvement:** debounce em eventos `PLAYER_HEALTH_LOW` e `PLAYER_MANA_LOW`
+- **improvement:** `update_from_engine()` com fallback seguro via `getattr` + `.get()`
+- **improvement:** `_start_engine_loop()` com try/except para nao silenciar erros
+- **improvement:** `gui.py` documentado com instrucoes de integracao
+- **docs:** README reescrito com arquitetura, fluxo de dados e exemplos
+
+### v1.0.0 (2026-07-26)
+- Interface grafica inicial (Status, Healing, Cavebot, Config)
+- Leitura de memoria via Win32 API com suporte a processos 32-bit
+- MemoryReader com cache TTL
+- ProcessManager com fallback PROCESS_ALL_ACCESS
+- BotEngine com ScriptEngine e EventManager

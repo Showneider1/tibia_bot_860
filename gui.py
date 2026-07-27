@@ -1,15 +1,32 @@
 """
-Entry point da interface grafica do TibiaBot 860.
-Uso: python gui.py
+Ponto de entrada da interface grafica do TibiaBot 860.
+
+Uso:
+    python gui.py
+    python -m gui
+
+Para integrar com o BotEngine:
+    from src.application.bot_engine import BotEngine
+    from src.ui.app import BotApp
+
+    engine = BotEngine(...)  # configure seus componentes
+    app = BotApp()
+    app.bot_engine = engine  # injeta antes de run()
+    app.run()
 """
 import sys
 import os
 
-# Garante que src/ esta no path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Garante que o diretorio raiz esta no sys.path
+sys.path.insert(0, os.path.dirname(__file__))
 
 from src.ui.app import BotApp
 
-if __name__ == "__main__":
+
+def main():
     app = BotApp()
     app.run()
+
+
+if __name__ == "__main__":
+    main()

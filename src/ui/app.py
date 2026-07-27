@@ -1,5 +1,15 @@
 """
 Janela principal do TibiaBot 860 UI.
+
+Fluxo de dados:
+  - Sem bot_engine: UI exibe zeros, sem simulacao
+  - Com bot_engine: _start_engine_loop() le memoria real a cada 150ms
+    e chama update_from_engine() para atualizar a tela
+
+Integracao com BotEngine:
+    app = BotApp()
+    app.bot_engine = bot_engine  # injeta antes de app.run()
+    app.run()
 """
 import threading
 import time
@@ -15,6 +25,15 @@ from src.ui.widgets.log_panel import LogPanel
 
 
 class BotApp:
+    """
+    Janela principal da UI do TibiaBot 860.
+
+    Atributos publicos:
+        bot_engine: instancia de BotEngine a ser injetada antes de run().
+                    Se None, a UI funciona em modo demo (dados zerados).
+        _player_data: dict com os dados atuais do player exibidos na UI.
+    """
+
     def __init__(self):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
@@ -28,16 +47,16 @@ class BotApp:
         self.bot_running = False
         self.bot_engine = None
 
-        # Dados do player - estaticos ate o bot_engine real ser integrado.
-        # Nao ha simulacao aleatoria: os valores so mudam via update_from_engine().
+        # Dados exibidos na UI — inicialmente zerados.
+        # Atualizado por update_from_engine() quando o bot conecta.
         self._player_data = {
-            "name": "--",
-            "level": 0,
+            "name":     "--",
+            "level":    0,
             "vocation": "--",
-            "hp": 0,      "hp_max": 1,
-            "mana": 0,    "mana_max": 1,
+            "hp":       0,  "hp_max":   1,
+            "mana":     0,  "mana_max": 1,
             "x": 0, "y": 0, "z": 0,
-            "stamina": 0,
+            "stamina":  0,
             "capacity": 0,
         }
 
@@ -45,49 +64,58 @@ class BotApp:
         self._bind_events()
 
     # ------------------------------------------------------------------
-    # Integracao com o bot_engine real
+    # Integracao com BotEngine
     # ------------------------------------------------------------------
-    def update_from_engine(self, player):
+
+    def update_from_engine(self, player) -> None:
         """
-        Chamado pelo BotEngine a cada tick quando um Player valido
-        for lido da memoria. Atualiza a UI com dados reais.
-        
-        Uso no bot_engine.py:
-            if self.player and hasattr(self, '_ui') and self._ui:
-                self._ui.update_from_engine(self.player)
+        Atualiza _player_data com os dados lidos da memoria pelo BotEngine.
+
+        Deve ser chamado pelo loop de engine (thread separada).
+        Agenda o refresh da UI via root.after() para ser thread-safe.
+
+        Args:
+            player: instancia de Player retornada por PlayerReader.get_player()
         """
         if player is None:
             return
-        s = player.stats
-        p = player.position
-        self._player_data.update({
-            "name":     player.name,
-            "level":    player.level,
-            "vocation": player.vocation,
-            "hp":       s.health,
-            "hp_max":   s.max_health,
-            "mana":     s.mana,
-            "mana_max": s.max_mana,
-            "x":        p.x,
-            "y":        p.y,
-            "z":        p.z,
-            "stamina":  player.stamina,
-            "capacity": player.capacity,
-        })
-        # Agenda refresh na thread da UI (thread-safe)
+
+        try:
+            s = player.stats
+            p = player.position
+            self._player_data.update({
+                "name":     getattr(player, "name", "--") or "--",
+                "level":    getattr(player, "level", 0) or 0,
+                "vocation": getattr(player, "vocation", "--") or "--",
+                "hp":       max(0, min(s.health, s.max_health)),
+                "hp_max":   max(1, s.max_health),
+                "mana":     max(0, min(s.mana, s.max_mana)),
+                "mana_max": max(1, s.max_mana),
+                "x":        p.x,
+                "y":        p.y,
+                "z":        p.z,
+                "stamina":  getattr(player, "stamina", 0) or 0,
+                "capacity": getattr(player, "capacity", 0) or 0,
+            })
+        except Exception:
+            return
+
         self.root.after(0, self._tabs["status"].refresh)
 
     # ------------------------------------------------------------------
-    # UI
+    # Construcao da UI
     # ------------------------------------------------------------------
-    def _build_ui(self):
+
+    def _build_ui(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
         self.sidebar = Sidebar(self.root, self)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
 
-        self._content = ctk.CTkFrame(self.root, fg_color=COLORS["bg_dark"], corner_radius=0)
+        self._content = ctk.CTkFrame(
+            self.root, fg_color=COLORS["bg_dark"], corner_radius=0
+        )
         self._content.grid(row=0, column=1, sticky="nsew")
         self._content.grid_rowconfigure(0, weight=1)
         self._content.grid_columnconfigure(0, weight=1)
@@ -106,16 +134,26 @@ class BotApp:
 
         self.show_tab("status")
 
-    def _bind_events(self):
+    def _bind_events(self) -> None:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def show_tab(self, name: str):
+    # ------------------------------------------------------------------
+    # Navegacao
+    # ------------------------------------------------------------------
+
+    def show_tab(self, name: str) -> None:
+        """Exibe a aba com o nome fornecido e marca como ativa na sidebar."""
         for key, tab in self._tabs.items():
             if key == name:
                 tab.tkraise()
         self.sidebar.set_active(name)
 
-    def toggle_bot(self):
+    # ------------------------------------------------------------------
+    # Controle do bot
+    # ------------------------------------------------------------------
+
+    def toggle_bot(self) -> None:
+        """Liga ou desliga o bot, tentando conectar ao engine se disponivel."""
         self.bot_running = not self.bot_running
         status = "ATIVADO" if self.bot_running else "PAUSADO"
         color  = COLORS["online_green"] if self.bot_running else COLORS["warn_yellow"]
@@ -125,45 +163,69 @@ class BotApp:
         if self.bot_running:
             self._connect_engine()
 
-    def _connect_engine(self):
+    def _connect_engine(self) -> None:
         """
-        Tenta conectar ao BotEngine real.
-        Se nao houver engine injetado, loga aviso - sem simulacao falsa.
+        Tenta iniciar o BotEngine e o loop de leitura.
+        Se bot_engine for None, loga aviso de modo demo.
         """
-        if self.bot_engine is not None:
-            ok = self.bot_engine.start()
-            if ok:
-                self.log_panel.log("Conectado ao Tibia. Lendo memoria...", COLORS["online_green"])
-                self._start_engine_loop()
-            else:
-                self.log_panel.log("Falha ao conectar. Tibia esta aberto?", COLORS["warn_yellow"])
-                self.bot_running = False
-                self.sidebar.update_bot_status(False)
-        else:
+        if self.bot_engine is None:
             self.log_panel.log(
-                "[DEMO] Sem conexao com o jogo. Inicie via bot_engine para dados reais.",
+                "[DEMO] Sem BotEngine injetado. Dados reais exigem bot_engine.",
                 COLORS["text_faint"],
             )
+            return
 
-    def _start_engine_loop(self):
-        """Loop de leitura de memoria em thread separada."""
+        ok = self.bot_engine.start()
+        if ok:
+            self.log_panel.log("Conectado ao Tibia. Lendo memoria...", COLORS["online_green"])
+            self._start_engine_loop()
+        else:
+            self.log_panel.log("Falha ao conectar. O Tibia esta aberto?", COLORS["warn_yellow"])
+            self.bot_running = False
+            self.sidebar.update_bot_status(False)
+
+    def _start_engine_loop(self) -> None:
+        """
+        Inicia thread de leitura de memoria.
+        Executa bot_engine.tick() a cada 150ms e chama update_from_engine()
+        com o player lido. Para automaticamente quando bot_running = False.
+        """
+        engine = self.bot_engine
+
         def _loop():
-            while self.bot_running and self.bot_engine:
-                self.bot_engine.tick()
-                player = self.bot_engine.player
-                if player:
-                    self.update_from_engine(player)
+            while self.bot_running and engine:
+                try:
+                    engine.tick()
+                    if engine.player:
+                        self.update_from_engine(engine.player)
+                except Exception as exc:
+                    self.root.after(
+                        0,
+                        lambda e=exc: self.log_panel.log(
+                            f"Erro no engine: {e}", COLORS["warn_yellow"]
+                        ),
+                    )
                 time.sleep(0.15)
-        threading.Thread(target=_loop, daemon=True).start()
 
-    def log(self, msg: str, color: str = None):
+        threading.Thread(target=_loop, daemon=True, name="BotEngineLoop").start()
+
+    # ------------------------------------------------------------------
+    # Utilitarios
+    # ------------------------------------------------------------------
+
+    def log(self, msg: str, color: str = None) -> None:
+        """Atalho para LogPanel.log()."""
         self.log_panel.log(msg, color)
 
-    def _on_close(self):
+    def _on_close(self) -> None:
+        """Callback chamado ao fechar a janela."""
         self.bot_running = False
+        if self.bot_engine:
+            self.bot_engine.stop()
         self.root.destroy()
 
-    def run(self):
+    def run(self) -> None:
+        """Inicia o mainloop da UI."""
         self.log_panel.log(
             "TibiaBot 860 iniciado. Clique em INICIAR BOT para conectar.",
             COLORS["text_muted"],
