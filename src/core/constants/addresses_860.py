@@ -130,12 +130,17 @@ PLAYER_SLOTS = {
 }
 
 # Additional Player addresses (targeting, etc.)
+# BUG-I FIX: go_to_x/y/z - ordem dos offsets corrigida.
+# TibiaAPI 8.60 armazena os campos na ordem: GoToX (+72), GoToY (+76), GoToZ (+80)
+# relativo à base 0x63FE8C (Experience).
+# A versão anterior tinha X com offset +80 e Z com +72, invertendo as coordenadas
+# X e Z na leitura de memória e fazendo o pathfinder calcular rotas erradas.
 PLAYER_EXTRA = {
     "current_tile_to_go":    MemoryAddress(0x63FEA0),
     "tiles_to_go":           MemoryAddress(0x63FEA4),
-    "go_to_x":               MemoryAddress(0x63FE8C + 80),  # Experience + 80
-    "go_to_y":               MemoryAddress(0x63FE8C + 76),  # GoToX - 4
-    "go_to_z":               MemoryAddress(0x63FE8C + 72),  # GoToX - 8
+    "go_to_x":               MemoryAddress(0x63FE8C + 72),  # Experience + 72 = 0x63FED4
+    "go_to_y":               MemoryAddress(0x63FE8C + 76),  # Experience + 76 = 0x63FED8
+    "go_to_z":               MemoryAddress(0x63FE8C + 80),  # Experience + 80 = 0x63FEDC
     "red_square":            MemoryAddress(0x63FE64),       # Target ID
     "green_square":          MemoryAddress(0x63FE60),       # Follow ID
     "white_square":          MemoryAddress(0x63FE5C),       # AutoRoute ID
