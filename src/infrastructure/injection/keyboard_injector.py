@@ -3,20 +3,17 @@ KeyboardInjector - Injeta comandos de teclado no cliente Tibia 8.60.
 
 Historico de correcoes:
   fix-1: PostMessage -> SendMessage (sincrono) para movimento
-  fix-2: SendMessage -> SendInput (global, background real, sem bloquear thread)
+  fix-2: SendMessage -> SendInput (background real, sem bloquear thread)
+  fix-3: WinError 87 (ERROR_INVALID_PARAMETER) no SendInput
+         Causa: dwExtraInfo declarado como POINTER(c_ulong) mas o campo
+         real e ULONG_PTR (inteiro). Ponteiro temporario era destruido
+         pelo GC antes do SendInput ler. Corrigido para c_ulonglong = 0.
+         Tambem: _INPUT_UNION sem _anonymous_ causava desalinhamento
+         em 64-bit. Adicionado _anonymous_ = ('union',).
 
 Tibia 8.60 processa movimento via GetKeyState/GetAsyncKeyState que leem
-o estado fisico global do teclado. PostMessage e asssincrono e nao atualiza
-esse estado. SendMessage era sincrono mas bloqueava o thread por ~420ms.
-
-SendInput injeta diretamente no fluxo de input do Windows (mesma fila que
-teclas fisicas), atualizando GetKeyState sem exigir foco da janela e sem
-bloqueio de thread. E o unico metodo que funciona em background real.
-
-Arquitetura:
-  - send_key_background(vk_code): SendInput KEYDOWN + sleep(25ms) + SendInput KEYUP
-  - cast_spell / send_hotkey: continuam usando send_key_background
-  - focus_client(): mantido por compatibilidade, nao e mais necessario
+o estado fisico global do teclado. SendInput injeta diretamente nesse
+fluxo, sem exigir foco da janela e sem bloquear o thread.
 """
 import time
 import ctypes
@@ -33,12 +30,22 @@ from src.core.interfaces.injector_interface import ICommandInjector
 from src.infrastructure.logging.logger import get_logger
 
 # ---------------------------------------------------------------------------
-# WinAPI - INPUT structures para SendInput
+# WinAPI - INPUT / KEYBDINPUT corretos para SendInput no Windows 64-bit
+#
+# Referencia: https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput
+#
+# KEYBDINPUT {
+#   WORD      wVk;          // 2 bytes
+#   WORD      wScan;        // 2 bytes
+#   DWORD     dwFlags;      // 4 bytes
+#   DWORD     time;         // 4 bytes
+#   ULONG_PTR dwExtraInfo;  // 8 bytes em 64-bit (NAO e ponteiro, e inteiro)
+# }
 # ---------------------------------------------------------------------------
 
-INPUT_KEYBOARD     = 1
-KEYEVENTF_KEYUP    = 0x0002
-KEYEVENTF_SCANCODE = 0x0008
+INPUT_KEYBOARD        = 1
+KEYEVENTF_KEYUP       = 0x0002
+KEYEVENTF_SCANCODE    = 0x0008
 KEYEVENTF_EXTENDEDKEY = 0x0001
 
 
@@ -48,7 +55,10 @@ class KEYBDINPUT(ctypes.Structure):
         ("wScan",       wintypes.WORD),
         ("dwFlags",     wintypes.DWORD),
         ("time",        wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        # ULONG_PTR: inteiro nativo de 8 bytes em 64-bit.
+        # NAO use POINTER(c_ulong) — o ponteiro temporario e destruido
+        # pelo GC antes do SendInput ler, causando WinError 87.
+        ("dwExtraInfo", ctypes.c_ulonglong),
     ]
 
 
@@ -59,21 +69,27 @@ class _INPUT_UNION(ctypes.Union):
 
 
 class INPUT(ctypes.Structure):
+    # _anonymous_ expoe os campos de _INPUT_UNION diretamente em INPUT,
+    # garantindo alinhamento correto em 64-bit (igual ao layout C do Windows).
+    _anonymous_ = ("union",)
     _fields_ = [
         ("type",  wintypes.DWORD),
         ("union", _INPUT_UNION),
     ]
 
 
+# Tamanho da struct calculado uma unica vez (exigido pelo 3o argumento do SendInput)
+_INPUT_SIZE = ctypes.sizeof(INPUT)
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.SendInput.argtypes = [
-    wintypes.UINT,
-    ctypes.POINTER(INPUT),
-    ctypes.c_int,
+    wintypes.UINT,          # nInputs
+    ctypes.POINTER(INPUT),  # pInputs
+    ctypes.c_int,           # cbSize
 ]
 _user32.SendInput.restype = wintypes.UINT
 
-# Mapa VK -> (scancode, extended)
+# Mapa VK -> (scancode OEM, extended_key)
 _VK_SCAN_MAP = {
     win32con.VK_UP:      (0x48, True),
     win32con.VK_DOWN:    (0x50, True),
@@ -95,8 +111,11 @@ _VK_SCAN_MAP = {
 def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
     """
     Constroi struct INPUT para SendInput.
-    Usa KEYEVENTF_SCANCODE para garantir que o Tibia reconheca a tecla
-    pelo scancode OEM e nao pelo vk abstrato.
+
+    Usa KEYEVENTF_SCANCODE: Tibia reconhece a tecla pelo scancode OEM
+    (independente do layout do teclado / ABNT2).
+    wVk deve ser 0 quando KEYEVENTF_SCANCODE esta ativo.
+    dwExtraInfo deve ser 0 (inteiro, nao ponteiro).
     """
     entry = _VK_SCAN_MAP.get(vk_code)
     if entry:
@@ -112,23 +131,23 @@ def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
         flags |= KEYEVENTF_KEYUP
 
     inp = INPUT()
-    inp.type = INPUT_KEYBOARD
-    inp.union.ki.wVk   = 0          # deve ser 0 quando usando SCANCODE
-    inp.union.ki.wScan = scancode
-    inp.union.ki.dwFlags = flags
-    inp.union.ki.time  = 0
-    inp.union.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+    inp.type         = INPUT_KEYBOARD
+    inp.ki.wVk       = 0          # 0 obrigatorio com KEYEVENTF_SCANCODE
+    inp.ki.wScan     = scancode
+    inp.ki.dwFlags   = flags
+    inp.ki.time      = 0
+    inp.ki.dwExtraInfo = 0        # ULONG_PTR = inteiro 0, NAO ponteiro
     return inp
 
 
 class KeyboardInjector(ICommandInjector):
     """
-    Injeta teclas via SendInput para o cliente Tibia.
+    Injeta teclas via SendInput para o cliente Tibia 8.60.
 
-    SendInput injeta no fluxo global de input do Windows, atualizando
-    GetKeyState/GetAsyncKeyState sem exigir foco da janela e sem bloquear
-    o thread chamador. E o unico metodo que funciona em background real
-    no Tibia 8.60.
+    SendInput injeta no fluxo global de input do Windows:
+      - Atualiza GetKeyState/GetAsyncKeyState (lidos pelo Tibia para movimento)
+      - Nao exige foco da janela alvo
+      - Nao bloqueia o thread chamador
     """
 
     def __init__(
@@ -142,7 +161,7 @@ class KeyboardInjector(ICommandInjector):
         self._log = get_logger("KeyboardInjector")
 
     # ------------------------------------------------------------------
-    # Resolucao de janela (mantida para focus_client e cast_spell)
+    # Resolucao de janela (mantida para focus_client / cast_spell)
     # ------------------------------------------------------------------
 
     def _find_window_by_pid(self, pid: int) -> bool:
@@ -214,7 +233,7 @@ class KeyboardInjector(ICommandInjector):
         self._hwnd = None
 
     def focus_client(self) -> bool:
-        """Nao e mais necessario para SendInput, mantido por compatibilidade."""
+        """Mantido por compatibilidade; nao e necessario para SendInput."""
         if not self._hwnd and not self._find_window():
             return False
         try:
@@ -228,31 +247,27 @@ class KeyboardInjector(ICommandInjector):
         """
         Envia tecla via SendInput (background real).
 
-        SendInput injeta no fluxo global de input do Windows:
-          - Atualiza GetKeyState / GetAsyncKeyState (lidos pelo Tibia para movimento)
-          - Nao exige foco da janela
-          - Nao bloqueia o thread chamador
-          - Tibia 8.60 processa o movimento normalmente
-
-        Sequencia: KEYDOWN -> sleep(25ms) -> KEYUP
-        O sleep de 25ms e o minimo para o cliente registrar a tecla
-        antes do release; nao bloqueia o loop (ver cavebot_script.py).
+        Sequencia: KEYDOWN -> sleep(25ms) -> KEYUP.
+        25ms e o tempo minimo para o Tibia registrar a transicao de estado
+        antes do KEYUP. Nao bloqueia o loop (cooldown gerenciado no cavebot).
         """
         inp_down = _build_input(vk_code, key_up=False)
         inp_up   = _build_input(vk_code, key_up=True)
 
-        sent = _user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(INPUT))
+        sent = _user32.SendInput(1, ctypes.byref(inp_down), _INPUT_SIZE)
         if sent != 1:
             err = ctypes.get_last_error()
-            self._log.warning(f"SendInput(KEYDOWN) falhou: WinError {err} vk=0x{vk_code:02X}")
+            self._log.warning(
+                f"SendInput(KEYDOWN) falhou: WinError {err} vk=0x{vk_code:02X}"
+            )
             return
 
-        time.sleep(0.025)   # 25ms: minimo para Tibia registrar a tecla
+        time.sleep(0.025)
 
-        _user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
+        _user32.SendInput(1, ctypes.byref(inp_up), _INPUT_SIZE)
 
     def _send_text_background(self, text: str) -> None:
-        """Digita texto em background (para magias/chat)."""
+        """Digita texto caractere a caractere (magias/chat)."""
         for ch in text:
             vk = win32api.VkKeyScan(ch) & 0xFF
             self.send_key_background(vk)
