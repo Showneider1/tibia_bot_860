@@ -132,6 +132,17 @@ class BotEngine:
 
             self._connected = True
             self._connection_retry_count = 0
+
+            # Propaga o PID da janela ao injector para que ele consiga
+            # resolver a janela do cliente mesmo quando o título não
+            # contém "tibia" (caso do Kaldrox Old Client).
+            pid = getattr(self._pm, "process_id", None)
+            if pid is not None:
+                try:
+                    self._injector.set_process_id(pid)
+                except Exception as e:
+                    self._log.debug(f"Não foi possível setar PID no injector: {e}")
+
             self._log.info("Bot conectado ao processo Tibia.")
             self._log.info(f"Script Engine pronto ({len(self.script_engine.list_scripts())} scripts).")
             return True

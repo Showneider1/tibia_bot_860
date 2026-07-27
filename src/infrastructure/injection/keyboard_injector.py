@@ -2,6 +2,10 @@ import time
 import win32api
 import win32con
 import win32gui
+try:
+    import win32process  # necessário apenas em Windows; usado para resolver hwnd por PID
+except ImportError:  # pragma: no cover -ambiente Linux/dev sem pywin32
+    win32process = None
 from src.core.interfaces.injector_interface import ICommandInjector
 from src.infrastructure.logging.logger import get_logger
 
@@ -60,27 +64,107 @@ def _make_lparam(vk_code: int, key_up: bool = False) -> int:
 class KeyboardInjector(ICommandInjector):
     """Injecao de comandos via PostMessage para rodar em background."""
 
-    def __init__(self, window_title_hint: str = "Tibia") -> None:
+    def __init__(
+        self,
+        window_title_hint: str = "Tibia",
+        process_id: int | None = None,
+    ) -> None:
+        """
+        Injetor de teclas via PostMessage.
+
+        Resolução da janela alvo (ordem):
+          1. process_id (se fornecido) — mais robusto, independe do título
+          2. window_title_hint (fallback) — mantém compat com Tibia clássico
+
+        Para o cliente Kaldrox, cujo título não contém "tibia", o caminho
+        por PID é o único confiável.
+        """
         self._window_title_hint = window_title_hint
+        self._process_id = process_id
         self._hwnd = None
         self._log = get_logger("KeyboardInjector")
 
-    def _find_window(self) -> bool:
-        def callback(hwnd, result):
+    # ------------------------------------------------------------------
+    # Resolução de janela
+    # ------------------------------------------------------------------
+
+    def _find_window_by_pid(self, pid: int) -> bool:
+        """Localiza a janela visível cujo processo dono tem o PID informado."""
+        if win32process is None:
+            return False
+        result: list[int] = []
+
+        def callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd)
-                if self._window_title_hint.lower() in title.lower():
+                try:
+                    _, hwnd_pid = win32process.GetWindowThreadProcessId(hwnd)
+                except Exception:
+                    hwnd_pid = 0
+                if hwnd_pid == pid:
                     result.append(hwnd)
             return True
 
-        result: list[int] = []
-        win32gui.EnumWindows(callback, result)
+        try:
+            win32gui.EnumWindows(callback, result)
+        except Exception as e:
+            self._log.debug(f"EnumWindows falhou: {e}")
+            return False
+
         if result:
             self._hwnd = result[0]
-            self._log.debug(f"Janela Tibia encontrada: hwnd={self._hwnd}")
+            self._log.debug(f"Janela encontrada por PID={pid}: hwnd={self._hwnd}")
             return True
-        self._log.warning("Janela Tibia NAO encontrada.")
         return False
+
+    def _find_window_by_title(self) -> bool:
+        """Localiza a janela visível cujo título contém o hint (case-insensitive)."""
+        result: list[int] = []
+
+        def callback(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title and self._window_title_hint.lower() in title.lower():
+                    result.append(hwnd)
+            return True
+
+        try:
+            win32gui.EnumWindows(callback, result)
+        except Exception as e:
+            self._log.debug(f"EnumWindows (title) falhou: {e}")
+            return False
+
+        if result:
+            self._hwnd = result[0]
+            self._log.debug(f"Janela encontrada por título: hwnd={self._hwnd}")
+            return True
+        return False
+
+    def _find_window(self) -> bool:
+        """
+        Tenta localizar a janela do cliente. Ordem:
+          1. por process_id (mais robusto)        — usado pelo Kaldrox
+          2. por título (fallback)                — Tibia clássico
+        Retorna True se encontrou.
+        """
+        if self._process_id is not None:
+            if self._find_window_by_pid(self._process_id):
+                return True
+            self._log.debug(
+                f"PID {self._process_id} não mapeou a uma janela visível; caindo para título."
+            )
+        if self._find_window_by_title():
+            return True
+        self._log.warning("Janela do cliente não encontrada.")
+        return False
+
+    # ------------------------------------------------------------------
+    # API pública (compatível com versão anterior)
+    # ------------------------------------------------------------------
+
+    def set_process_id(self, process_id: int | None) -> None:
+        """Atualiza o PID e invalida hwnd em cache — útil se o jogador relogar."""
+        self._process_id = process_id
+        self._hwnd = None
 
     def focus_client(self) -> bool:
         """Mantido por compatibilidade."""

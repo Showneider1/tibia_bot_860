@@ -159,6 +159,23 @@ class CavebotTab(ctk.CTkFrame):
         return total
 
     def _toggle_active(self):
+        # Guarda: o Cavebot só anda quando o BotEngine está conectado E
+        # habilitado (controlado pelo botão "INICIAR BOT" na sidebar).
+        # Sem essa checagem, o usuário clica em "Ativar Cavebot" e o
+        # script fica enabled=True mas nunca executa, pois
+        # BotEngine._run_scripts() requer engine.enabled True.
+        if not self._active:
+            engine = getattr(self.app, "bot_engine", None)
+            engine_enabled = bool(engine and getattr(engine, "enabled", False))
+            engine_connected = bool(engine and getattr(engine, "_connected", False))
+            if not engine or not engine_enabled or not engine_connected:
+                self.app.log(
+                    "Cavebot: ative primeiro o bot na sidebar (INICIAR BOT) "
+                    "antes de ligar o Cavebot.",
+                    COLORS["warn_yellow"],
+                )
+                return  # NÃO altera self._active — botão permanece "Ativar"
+
         self._active = not self._active
 
         script = self._get_script()

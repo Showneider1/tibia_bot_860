@@ -46,7 +46,7 @@ def _build_engine():
         from src.infrastructure.memory.memory_reader import MemoryReader
         from src.infrastructure.injection.keyboard_injector import KeyboardInjector
         from src.application.bot_engine import BotEngine
-        from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE
+        from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE, PLAYER_EXTRA
 
         pm = ProcessManager()
         mr = MemoryReader(pm)
@@ -56,7 +56,7 @@ def _build_engine():
             process_manager=pm,
             memory_reader=mr,
             keyboard_injector=ki,
-            player_addresses=PLAYER,
+            player_addresses={**PLAYER, **PLAYER_EXTRA},
             battle_list_addresses=BATTLE_LIST,
             creature_offsets=CREATURE,
         )

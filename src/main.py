@@ -19,6 +19,7 @@ from src.core.constants.addresses_860 import (
     PLAYER,
     BATTLE_LIST,
     CREATURE,
+    PLAYER_EXTRA,
 )
 
 def _is_admin() -> bool:
@@ -58,7 +59,7 @@ class BotApplication:
                 process_manager=process_manager,
                 memory_reader=memory_reader,
                 keyboard_injector=keyboard_injector,
-                player_addresses=PLAYER,
+                player_addresses={**PLAYER, **PLAYER_EXTRA},
                 battle_list_addresses=BATTLE_LIST,
                 creature_offsets=CREATURE,
             )

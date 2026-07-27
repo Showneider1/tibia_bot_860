@@ -81,8 +81,26 @@ class PlayerReader:
                 except Exception:
                     pass
 
-            # Posicao inicial zerada -- sincronizada via BattleList no bot_engine
+            # Posicao real do player: leitura direta de go_to_x/y/z (PLAYER_EXTRA).
+            # Em Tibia 8.60 clássico, esses endereços guardam a posição ATUAL do
+            # player quando parado, e a posição-alvo quando andando. É o padrão
+            # usado por Elfbot/Xenobot e confirmado em Tibia Address API.txt.
+            # Fallback (0,0,0) caso os endereços não estejam disponíveis ou
+            # falhem na leitura — a sincronização via BattleList no bot_engine
+            # ainda pode sobrescrever depois.
             position = Position(x=0, y=0, z=0)
+            addr_gx = self._addresses.get("go_to_x")
+            addr_gy = self._addresses.get("go_to_y")
+            addr_gz = self._addresses.get("go_to_z")
+            if addr_gx and addr_gy and addr_gz:
+                try:
+                    px = self._memory.read_int(addr_gx, use_cache=False)
+                    py = self._memory.read_int(addr_gy, use_cache=False)
+                    pz = self._memory.read_int(addr_gz, use_cache=False)
+                    if px > 0 and py > 0:
+                        position = Position(x=px, y=py, z=pz)
+                except Exception as e:
+                    self._log.debug(f"Falha ao ler go_to_x/y/z: {e}")
 
             player = Player(
                 id=player_id,
