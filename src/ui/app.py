@@ -22,7 +22,11 @@ from src.ui.tabs.healing_tab import HealingTab
 from src.ui.tabs.cavebot_tab import CavebotTab
 from src.ui.tabs.settings_tab import SettingsTab
 from src.ui.widgets.log_panel import LogPanel
+from src.application.scripts.healing_script import HealingScript
+from src.application.scripts.buff_script import BuffScript
+from src.application.scripts.aimbot_script import AimbotScript
 from src.application.scripts.cavebot_script import CavebotScript
+from src.application.scripts.looter_script import LooterScript
 
 
 class BotApp:
@@ -79,18 +83,37 @@ class BotApp:
 
     def _register_default_scripts(self) -> None:
         """
-        Registra scripts built-in no script_engine do BotEngine.
+        Registra todos os scripts built-in no script_engine do BotEngine.
+
         Idempotente: so registra se o script ainda nao estiver na lista.
+        Todos iniciam desativados (enabled=False); a UI controla a
+        ativacao individual de cada um (HealingTab, CavebotTab, etc.).
+
+        Prioridades (maior = executa primeiro):
+            HealingScript : 100
+            BuffScript    :  90
+            AimbotScript  :  50
+            CavebotScript :  30
+            LooterScript  :  20
         """
         if self.bot_engine is None:
             return
         se = self.bot_engine.script_engine
         registered = {s["name"] for s in se.list_scripts()}
 
-        if "CaveBot" not in registered:
-            cavebot = CavebotScript()
-            cavebot.enabled = False   # comeca desativado — a UI controla
-            se.register(cavebot)
+        # Ordem explicita para legibilidade nos logs de registro
+        builtins = [
+            ("HealingBot", HealingScript),
+            ("BuffManager", BuffScript),
+            ("AimBot",      AimbotScript),
+            ("CaveBot",     CavebotScript),
+            ("Looter",      LooterScript),
+        ]
+        for name, script_cls in builtins:
+            if name not in registered:
+                script = script_cls()
+                script.enabled = False   # UI controla ativacao
+                se.register(script)
 
     def update_from_engine(self, player) -> None:
         """
