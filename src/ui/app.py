@@ -28,21 +28,58 @@ class BotApp:
         self.bot_running = False
         self.bot_engine = None
 
-        # Mock — valores SEMPRE respeitam o maximo
-        self._mock_player = {
-            "name": "Specter Um",
-            "level": 109,
-            "vocation": "Elder Druid",
-            "hp": 690, "hp_max": 690,
-            "mana": 2985, "mana_max": 3065,
-            "x": 32337, "y": 31790, "z": 7,
-            "stamina": 2520,
-            "capacity": 76450,
+        # Dados do player - estaticos ate o bot_engine real ser integrado.
+        # Nao ha simulacao aleatoria: os valores so mudam via update_from_engine().
+        self._player_data = {
+            "name": "--",
+            "level": 0,
+            "vocation": "--",
+            "hp": 0,      "hp_max": 1,
+            "mana": 0,    "mana_max": 1,
+            "x": 0, "y": 0, "z": 0,
+            "stamina": 0,
+            "capacity": 0,
         }
 
         self._build_ui()
         self._bind_events()
 
+    # ------------------------------------------------------------------
+    # Integracao com o bot_engine real
+    # ------------------------------------------------------------------
+    def update_from_engine(self, player):
+        """
+        Chamado pelo BotEngine a cada tick quando um Player valido
+        for lido da memoria. Atualiza a UI com dados reais.
+        
+        Uso no bot_engine.py:
+            if self.player and hasattr(self, '_ui') and self._ui:
+                self._ui.update_from_engine(self.player)
+        """
+        if player is None:
+            return
+        s = player.stats
+        p = player.position
+        self._player_data.update({
+            "name":     player.name,
+            "level":    player.level,
+            "vocation": player.vocation,
+            "hp":       s.health,
+            "hp_max":   s.max_health,
+            "mana":     s.mana,
+            "mana_max": s.max_mana,
+            "x":        p.x,
+            "y":        p.y,
+            "z":        p.z,
+            "stamina":  player.stamina,
+            "capacity": player.capacity,
+        })
+        # Agenda refresh na thread da UI (thread-safe)
+        self.root.after(0, self._tabs["status"].refresh)
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
     def _build_ui(self):
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
@@ -81,23 +118,42 @@ class BotApp:
     def toggle_bot(self):
         self.bot_running = not self.bot_running
         status = "ATIVADO" if self.bot_running else "PAUSADO"
-        color = COLORS["online_green"] if self.bot_running else COLORS["warn_yellow"]
+        color  = COLORS["online_green"] if self.bot_running else COLORS["warn_yellow"]
         self.sidebar.update_bot_status(self.bot_running)
         self.log_panel.log(f"Bot {status}", color)
-        if self.bot_running:
-            self._start_mock_updates()
 
-    def _start_mock_updates(self):
-        """Simula variacoes de HP/Mana dentro dos limites corretos."""
+        if self.bot_running:
+            self._connect_engine()
+
+    def _connect_engine(self):
+        """
+        Tenta conectar ao BotEngine real.
+        Se nao houver engine injetado, loga aviso - sem simulacao falsa.
+        """
+        if self.bot_engine is not None:
+            ok = self.bot_engine.start()
+            if ok:
+                self.log_panel.log("Conectado ao Tibia. Lendo memoria...", COLORS["online_green"])
+                self._start_engine_loop()
+            else:
+                self.log_panel.log("Falha ao conectar. Tibia esta aberto?", COLORS["warn_yellow"])
+                self.bot_running = False
+                self.sidebar.update_bot_status(False)
+        else:
+            self.log_panel.log(
+                "[DEMO] Sem conexao com o jogo. Inicie via bot_engine para dados reais.",
+                COLORS["text_faint"],
+            )
+
+    def _start_engine_loop(self):
+        """Loop de leitura de memoria em thread separada."""
         def _loop():
-            import random
-            while self.bot_running:
-                p = self._mock_player
-                # Clamp: nunca ultrapassa o maximo nem vai abaixo de 1
-                p["hp"]   = max(1, min(p["hp_max"],   p["hp"]   + random.randint(-20, 15)))
-                p["mana"] = max(1, min(p["mana_max"], p["mana"] + random.randint(-30, 20)))
-                self.root.after(0, self._tabs["status"].refresh)
-                time.sleep(1.5)
+            while self.bot_running and self.bot_engine:
+                self.bot_engine.tick()
+                player = self.bot_engine.player
+                if player:
+                    self.update_from_engine(player)
+                time.sleep(0.15)
         threading.Thread(target=_loop, daemon=True).start()
 
     def log(self, msg: str, color: str = None):
@@ -108,5 +164,9 @@ class BotApp:
         self.root.destroy()
 
     def run(self):
-        self.log_panel.log("TibiaBot 860 iniciado. Aguardando conexao com o jogo...", COLORS["text_muted"])
+        self.log_panel.log(
+            "TibiaBot 860 iniciado. Clique em INICIAR BOT para conectar.",
+            COLORS["text_muted"],
+        )
+        self._tabs["status"].refresh()
         self.root.mainloop()
