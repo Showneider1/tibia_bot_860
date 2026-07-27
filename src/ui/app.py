@@ -180,6 +180,10 @@ class BotApp:
 
         if self.bot_running:
             self._connect_engine()
+        else:
+            # Pausa o engine sem desconectar
+            if self.bot_engine:
+                self.bot_engine.enabled = False
 
     def _connect_engine(self) -> None:
         if self.bot_engine is None:
@@ -191,6 +195,8 @@ class BotApp:
 
         ok = self.bot_engine.start()
         if ok:
+            # BUG 1 CORRIGIDO: engine.enabled deve ser True para tick() rodar os scripts
+            self.bot_engine.enabled = True
             self.log_panel.log("Conectado ao Tibia. Lendo memoria...", COLORS["online_green"])
             self._start_engine_loop()
         else:

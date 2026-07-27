@@ -162,7 +162,6 @@ class CavebotTab(ctk.CTkFrame):
         self._active = not self._active
 
         script = self._get_script()
-        engine = getattr(self.app, "bot_engine", None)
 
         if self._active:
             total_wps = 0
@@ -170,23 +169,15 @@ class CavebotTab(ctk.CTkFrame):
                 total_wps = self._sync_waypoints_to_script(script)
                 script.enabled = True
                 script.on_enable()
-            if engine:
-                engine.enabled = True
+            # BUG 3 CORRIGIDO: nao tocamos em engine.enabled aqui.
+            # engine.enabled e controlado exclusivamente por toggle_bot() /
+            # _connect_engine() em app.py (botao INICIAR BOT).
             state_msg = f"Cavebot ATIVADO ({total_wps} waypoints carregados)."
             color = COLORS["online_green"]
         else:
             if script:
                 script.enabled = False
                 script.on_disable()
-            # Desativa engine somente se nenhum outro script estiver ativo
-            if engine:
-                other_active = any(
-                    getattr(s, "enabled", False)
-                    for s in engine.script_engine._scripts
-                    if s.name != "CaveBot"
-                )
-                if not other_active:
-                    engine.enabled = False
             state_msg = "Cavebot desativado."
             color = COLORS["warn_yellow"]
 
