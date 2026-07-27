@@ -1,5 +1,6 @@
 """
-Exemplo de uso do bot com Script Engine (FASE 2).
+Exemplo de uso do bot com Script Engine melhorado (FASE 2+).
+Inclui: Healing avançado, BuffManager, Aimbot com targeting, Cavebot, Looter e StatsTracker.
 """
 import sys
 from pathlib import Path
@@ -11,9 +12,11 @@ from src.infrastructure.memory.memory_reader import MemoryReader
 from src.infrastructure.injection.keyboard_injector import KeyboardInjector
 from src.application.bot_engine import BotEngine
 from src.application.scripts.healing_script import HealingScript
+from src.application.scripts.buff_script import BuffScript
 from src.application.scripts.aimbot_script import AimbotScript
 from src.application.scripts.cavebot_script import CavebotScript
 from src.application.scripts.looter_script import LooterScript
+from src.application.stats_tracker import get_stats_tracker
 from src.application.events.event_handlers import EventHandlers
 from src.application.events.event_types import EventType
 from src.core.entities.waypoint import Waypoint
@@ -43,25 +46,40 @@ def main():
     if not bot.start():
         logger.error("Falha ao conectar. Certifique-se que o Tibia está aberto.")
         return
+    
+    # Inicia tracking de estatísticas
+    if bot.player:
+        stats.start_session(bot.player)
+        logger.info("📊 Stats tracker iniciado")
 
     # ========================================
     # REGISTRA SCRIPTS
     # ========================================
     
-    # 1. Healing Script (prioridade máxima)
+    # 1. Healing Script (prioridade máxima) - DPS-based healing com múltiplos spells
     healing = HealingScript()
     healing.config["hp_threshold"] = 60  # Cura quando HP < 60%
     healing.config["mana_threshold"] = 30
+    healing.config["enable_dps_healing"] = True  # Ativa healing baseado em dano/s
+    healing.config["enable_sacrifice"] = True  # Permite utana vid em emergências
     bot.script_engine.register(healing)
     
-    # 2. Aimbot Script
+    # 2. Buff Script - mantém buffs ativos (magic shield, haste, etc.)
+    buff_manager = BuffScript()
+    buff_manager.config["enabled_buffs"] = ["magic_shield"]  # Ativa magic shield
+    # Adicione "haste" se for Knight/Paladin
+    # buff_manager.config["enabled_buffs"].append("haste")
+    bot.script_engine.register(buff_manager)
+    
+    # 3. Aimbot Script - targeting avançado com combo attacks
     aimbot = AimbotScript()
-    aimbot.config["combat_mode"] = "lowest_hp"
+    aimbot.config["targeting_mode"] = "highest_xp"  # Prioriza criaturas que dão mais XP
     aimbot.config["max_distance"] = 7
     aimbot.config["target_blacklist"] = ["Training Assistant"]
+    aimbot.config["enable_combo_attacks"] = True  # Ativa combo spells
     bot.script_engine.register(aimbot)
     
-    # 3. Cavebot Script
+    # 4. Cavebot Script - com anti-stuck e support a follow
     cavebot = CavebotScript()
     # Adiciona waypoints de exemplo
     cavebot.add_waypoint(Waypoint(Position(32360, 31780, 7), action="walk"))
@@ -69,15 +87,21 @@ def main():
     cavebot.add_waypoint(Waypoint(Position(32365, 31785, 7), action="walk"))
     cavebot.add_waypoint(Waypoint(Position(32360, 31785, 7), action="walk"))
     cavebot.config["loop"] = True
+    cavebot.config["enable_anti_stuck"] = True  # Ativa anti-stuck
     bot.script_engine.register(cavebot)
     
-    # 4. Looter Script
+    # 5. Looter Script - com tracking de kills e loot filter
     looter = LooterScript()
     looter.config["items_to_loot"] = {
         3031: "Gold Coin",
         3035: "Platinum Coin",
+        3034: "Crystal Coin",
     }
+    looter.config["track_kills"] = True
     bot.script_engine.register(looter)
+    
+    # 6. Stats Tracker - para HUD e estatísticas de caçada
+    stats = get_stats_tracker()
 
     # ========================================
     # CONFIGURA EVENT HANDLERS
@@ -96,6 +120,7 @@ def main():
     
     logger.info("Habilitando scripts...")
     bot.script_engine.enable_script("HealingBot")
+    bot.script_engine.enable_script("BuffManager")  # Mantém buffs ativos
     bot.script_engine.enable_script("AimBot")
     bot.script_engine.enable_script("CaveBot")  # Descomente para ativar
     # bot.script_engine.enable_script("Looter")   # Descomente para ativar

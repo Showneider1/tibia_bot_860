@@ -64,6 +64,100 @@ LOGIN = {
 # Map Pointer (para pegar posição real do player)
 MAP_POINTER = MemoryAddress(0x654118)
 
+# === NOVOS ENDEREÇOS PARA FUNCIONALIDADES AVANÇADAS ===
+
+# Containers (Bags, Corpses, etc.) - para loot system
+CONTAINER = {
+    "start":              MemoryAddress(0x64CD10),
+    "step_container":     492,
+    "step_slot":          12,
+    "max_containers":     16,
+    "max_stack":          100,
+    "distance_is_open":   0,
+    "distance_id":        4,
+    "distance_name":      16,
+    "distance_volume":    48,
+    "distance_amount":    56,
+    "distance_item_id":   60,
+    "distance_item_count": 64,
+}
+
+# Map/Tiles (para leitura de items no chão)
+MAP = {
+    "map_pointer":            MemoryAddress(0x654118),
+    "step_tile":              168,
+    "step_tile_object":       12,
+    "distance_tile_object_count": 0,
+    "distance_tile_objects":  4,
+    "distance_object_id":     0,
+    "distance_object_data":   4,
+    "distance_object_data_ex": 8,
+    "max_tile_objects":       10,
+    "max_x":                  18,
+    "max_y":                  14,
+    "max_z":                  8,
+    "max_tiles":              2016,
+    "z_axis_default":         7,
+}
+
+# Hotkeys (para auto-use de potions/food)
+HOTKEY = {
+    "send_automatically_start": MemoryAddress(0x799EE0),
+    "send_automatically_step":  0x01,
+    "text_start":              MemoryAddress(0x799F08),
+    "text_step":               0x100,
+    "object_start":            MemoryAddress(0x799E50),
+    "object_step":             0x04,
+    "object_use_type_start":   MemoryAddress(0x799D30),
+    "object_use_type_step":    0x04,
+    "max_hotkeys":             36,
+}
+
+# Player Slots (equipamentos)
+PLAYER_SLOTS = {
+    "slot_head":     MemoryAddress(0x64CC98),
+    "slot_neck":     MemoryAddress(0x64CC98 + 12),   # Head + 12
+    "slot_backpack": MemoryAddress(0x64CC98 + 24),   # Head + 24
+    "slot_armor":    MemoryAddress(0x64CC98 + 36),   # Head + 36
+    "slot_right":    MemoryAddress(0x64CC98 + 48),   # Head + 48
+    "slot_left":     MemoryAddress(0x64CC98 + 60),   # Head + 60
+    "slot_legs":     MemoryAddress(0x64CC98 + 72),   # Head + 72
+    "slot_feet":     MemoryAddress(0x64CC98 + 84),   # Head + 84
+    "slot_ring":     MemoryAddress(0x64CC98 + 96),   # Head + 96
+    "slot_ammo":     MemoryAddress(0x64CC98 + 108),  # Head + 108
+    "max_slots":     10,
+    "distance_slot_count": 4,
+}
+
+# Additional Player addresses (targeting, etc.)
+PLAYER_EXTRA = {
+    "current_tile_to_go":    MemoryAddress(0x63FEA0),
+    "tiles_to_go":           MemoryAddress(0x63FEA4),
+    "go_to_x":               MemoryAddress(0x63FE8C + 80),  # Experience + 80
+    "go_to_y":               MemoryAddress(0x63FE8C + 76),  # GoToX - 4
+    "go_to_z":               MemoryAddress(0x63FE8C + 72),  # GoToX - 8
+    "red_square":            MemoryAddress(0x63FE64),       # Target ID
+    "green_square":          MemoryAddress(0x63FE60),       # Follow ID
+    "white_square":          MemoryAddress(0x63FE5C),       # AutoRoute ID
+    "target_id":             MemoryAddress(0x63FE64),       # Same as red_square
+    "target_battlelist_id":  MemoryAddress(0x63FE5C),       # TargetId - 8
+    "target_type":           MemoryAddress(0x63FE67),       # TargetId + 3
+    "player_z":              MemoryAddress(0x64F600),
+    "attack_count":          MemoryAddress(0x63DA40),
+    "follow_count":          MemoryAddress(0x63DA60),       # AttackCount + 0x20
+}
+
+# VIP List (para detecção de players)
+VIP = {
+    "start":           MemoryAddress(0x63DBB8),
+    "step_players":    0x2C,
+    "max_players":     200,
+    "distance_id":     0,
+    "distance_name":   4,
+    "distance_status": 34,
+    "distance_icon":   40,
+}
+
 # Vocações mapeadas pelo byte lido de 'vocation' (0x63FE21)
 # Tibia 8.60 encoding: 1-4 promovable, 5-8 promoted
 VOCATIONS = {
