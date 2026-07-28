@@ -12,9 +12,15 @@ Historico de correcoes:
          campos de padding manuais.
          sizeof esperado: 28 em 32-bit, 32 em 64-bit.
          SendInput atomico (array[KEYDOWN, KEYUP]) mantido.
+  v4:    SendInput -> PostMessage WM_KEYDOWN/WM_KEYUP.
+         SendInput so funciona para foreground window. PostMessage envia
+         diretamente para a fila de mensagens da janela alvo (HWND),
+         funcionando em background. Movimento usa teclas Numpad que o
+         Tibia processa mesmo com chat aberto.
+         Metodo identico ao usado por ElfBot/XenoBot.
 
-Tibia 8.60 processa movimento via GetAsyncKeyState que le o estado
-global do teclado. SendInput injeta nesse fluxo sem exigir foco.
+Tibia 8.60 processa movimento via window proc. PostMessage(WM_KEYDOWN/WM_KEYUP)
+injeta na fila de mensagens da janela alvo sem exigir foco.
 """
 import sys
 import time
@@ -153,10 +159,12 @@ def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
 
 class KeyboardInjector(ICommandInjector):
     """
-    Injeta teclas via SendInput para o cliente Tibia 8.60.
+    Injeta teclas via PostMessage WM_KEYDOWN/WM_KEYUP no HWND do cliente.
 
-    SendInput atualiza GetKeyState/GetAsyncKeyState globalmente.
-    Nao exige foco da janela. Nao bloqueia o thread chamador.
+    PostMessage envia eventos diretamente para a fila de mensagens da janela
+    alvo, sem exigir foreground. Movimento usa VK Numpad (Tibia processa
+    mesmo com chat aberto). Cast de magias envia texto caractere a caractere
+    (Tibia abre chat automaticamente).
     """
 
     def __init__(
@@ -242,7 +250,7 @@ class KeyboardInjector(ICommandInjector):
         self._hwnd = None
 
     def focus_client(self) -> bool:
-        """Mantido por compatibilidade; nao e necessario para SendInput."""
+        """Mantido por compatibilidade; nao e necessario para PostMessage."""
         if not self._hwnd and not self._find_window():
             return False
         try:
@@ -254,30 +262,43 @@ class KeyboardInjector(ICommandInjector):
 
     def send_key_background(self, vk_code: int) -> None:
         """
-        Envia KEYDOWN + KEYUP via SendInput atomico (array de 2 eventos).
+        Envia KEYDOWN + KEYUP via PostMessage para o HWND alvo.
 
-        SendInput(2, [down, up], cbSize) injeta os dois eventos como bloco
-        indivisivel no fluxo de input do Windows, atualizando
-        GetAsyncKeyState sem exigir foco da janela alvo.
+        PostMessage(WM_KEYDOWN/KEYUP, vk, lParam) injeta na fila de mensagens
+        da janela do Tibia. Funciona em background (sem foreground).
+        Movement keys (Numpad) sao processadas mesmo com chat aberto.
 
-        sleep(35ms) pos-envio: garante que o Tibia processe
-        GetAsyncKeyState antes do proximo tick do cavebot.
+        lParam bits:
+          0-15:  repeat count (1)
+          16-23: scancode
+          24:    extended key flag (setas)
+          30:    previous key state (0=up, 1=down)
+          31:    transition state (0=press, 1=release)
+
+        sleep(35ms) pos-envio: garante processamento antes do proximo tick.
         """
-        inp_down = _build_input(vk_code, key_up=False)
-        inp_up   = _build_input(vk_code, key_up=True)
-
-        arr  = (INPUT * 2)(inp_down, inp_up)
-        sent = _user32.SendInput(2, arr, _INPUT_SIZE)
-
-        if sent != 2:
-            err = ctypes.get_last_error()
-            self._log.warning(
-                f"SendInput falhou: enviou {sent}/2, WinError {err} vk=0x{vk_code:02X}"
-            )
+        if not self._hwnd and not self._find_window():
+            self._log.error("HWND nao encontrado para PostMessage")
             return
 
-        self._log.debug(f"SendInput OK vk=0x{vk_code:02X}")
-        time.sleep(0.035)
+        scancode = win32api.MapVirtualKey(vk_code, 0) & 0xFF
+
+        extended = 0x01000000 if vk_code in (
+            win32con.VK_UP, win32con.VK_DOWN, win32con.VK_LEFT, win32con.VK_RIGHT,
+            win32con.VK_PRIOR, win32con.VK_NEXT, win32con.VK_END, win32con.VK_HOME,
+            win32con.VK_INSERT, win32con.VK_DELETE, win32con.VK_APPS,
+        ) else 0
+
+        lparam_down = 1 | (scancode << 16) | extended
+        lparam_up   = 1 | (scancode << 16) | extended | (1 << 30) | (1 << 31)
+
+        try:
+            win32gui.PostMessage(self._hwnd, win32con.WM_KEYDOWN, vk_code, lparam_down)
+            time.sleep(0.035)
+            win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
+            self._log.debug(f"PostMessage OK vk=0x{vk_code:02X}")
+        except Exception as e:
+            self._log.error(f"PostMessage falhou vk=0x{vk_code:02X}: {e}")
 
     def _send_text_background(self, text: str) -> None:
         """Digita texto caractere a caractere (magias/chat)."""

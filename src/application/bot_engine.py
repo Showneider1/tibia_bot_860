@@ -67,7 +67,7 @@ class BotEngine:
             memory_writer = MemoryWriter(process_manager)
         self._memory_writer = memory_writer
 
-        # MemoryWalker v3: usa SendInput via KeyboardInjector.
+        # MemoryWalker v4: usa PostMessage via KeyboardInjector.
         # O injector e injetado em start() apos o PID ser configurado.
         self._walker = MemoryWalker()
 
@@ -113,7 +113,7 @@ class BotEngine:
     @property
     def walker(self) -> MemoryWalker:
         """
-        MemoryWalker v3: movimento via SendInput + KEYEVENTF_SCANCODE.
+        MemoryWalker v4: movimento via PostMessage WM_KEYDOWN/WM_KEYUP.
         Delega para KeyboardInjector.send_key_background(vk).
         Interface publica: walk_to / cooldown_passed / reset.
         """
@@ -222,13 +222,13 @@ class BotEngine:
 
             pid = getattr(self._pm, "process_id", None)
             if pid is not None:
-                # Propaga PID ao KeyboardInjector (SendInput + cast_spell)
+                # Propaga PID ao KeyboardInjector (PostMessage + cast_spell)
                 try:
                     self._injector.set_process_id(pid)
                 except Exception as e:
                     self._log.debug(f"Nao foi possivel setar PID no injector: {e}")
 
-                # Injeta KeyboardInjector no MemoryWalker v3 (SendInput)
+                # Injeta KeyboardInjector no MemoryWalker v4 (PostMessage)
                 # Deve ocorrer APOS set_process_id para garantir PID configurado.
                 self._walker.set_injector(self._injector)
                 self._log.debug("KeyboardInjector injetado no MemoryWalker.")

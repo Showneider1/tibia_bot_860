@@ -15,8 +15,7 @@ Historico de correcoes:
              Corrigido com cooldown baseado em timestamp (_last_step_time).
   BUG-SENDINPUT: send_key_background + win32con falha com WinError 87 em contextos
              sem desktop interativo e nao funciona em background.
-             Substituido por MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP)
-             identico ao metodo do ElfBot/XenoBot.
+             Corrigido no KeyboardInjector v4: SendInput -> PostMessage.
   BUG-WALKTO: _move_player chamava walk_to(next_step) com apenas 1 argumento.
              memory_walker.walk_to exige (current, destination).
              Com 1 arg: current=next_step, destination ausente -> TypeError ou
@@ -104,7 +103,7 @@ class CavebotScript(BaseScript):
         """
         Chamado a cada tick pelo ScriptEngine.
         Cooldown entre passos via _last_step_time (sem time.sleep).
-        Movimento via MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP) - sem foco.
+        Movimento via MemoryWalker (PostMessage WM_KEYDOWN/WM_KEYUP).
         """
         player: Player = context.get("player")
         creatures: List[Creature] = context.get("creatures", [])

@@ -81,7 +81,6 @@ def main():
 
     engine = _build_engine()
     if engine is not None:
-        # set_bot_engine() injeta o engine E registra o CavebotScript automaticamente
         app.set_bot_engine(engine)
     else:
         app.log(

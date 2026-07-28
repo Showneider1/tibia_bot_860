@@ -15,7 +15,6 @@ class Settings:
 
     def __init__(self, config_path: str | None = None):
         self.config_path = Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
-        self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
         self._log = get_logger("Settings")
         self.load()

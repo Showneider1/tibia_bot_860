@@ -1,5 +1,5 @@
 """
-MemoryWalker - Movimento via SendInput + KEYEVENTF_SCANCODE.
+MemoryWalker - Movimento via PostMessage WM_KEYDOWN/WM_KEYUP.
 
 Diagnostico historico:
   v1 - PostMessage(WM_KEYDOWN/WM_KEYUP): digitava no chat quando o chat
@@ -7,15 +7,18 @@ Diagnostico historico:
   v2 - WriteProcessMemory nos enderecos go_to_x/y/z (TibiaAPI 0x63FED4):
        WPM retornava OK mas o personagem nao se movia. Os enderecos GoTo
        sao reconhecidos pelo cliente oficial, mas nao pelo servidor Kaldrox.
-  v3 (atual) - SendInput via KeyboardInjector.send_key_background(vk).
-       SendInput injeta no fluxo global do Windows (GetAsyncKeyState),
-       que o Tibia 8.60 le para processar o movimento. Nao exige foco da
-       janela. Nao digita no chat (KEYEVENTF_SCANCODE, sem wVk).
+  v3 - SendInput via KeyboardInjector.send_key_background(vk).
+       SendInput atualiza GetAsyncKeyState globalmente, mas so funciona
+       quando a janela tem foreground focus.
+  v4 (atual) - PostMessage WM_KEYDOWN/WM_KEYUP via KeyboardInjector.
+       PostMessage envia diretamente para a fila de mensagens do HWND alvo.
+       Funciona em background. Movimento usa VK Numpad (Tibia processa
+       mesmo com chat aberto). Metodo identico ao ElfBot/XenoBot.
 
 Arquitetura:
   walk_to(current, destination) calcula dx/dy, mapeia para VK Numpad e
-  delega para self._injector.send_key_background(vk). O injector ja tem
-  toda a infraestrutura SendInput testada e funcionando (keyboard_injector.py).
+  delega para self._injector.send_key_background(vk). O injector usa
+  PostMessage para enviar ao HWND do processo alvo.
 
 Mapa direcional Numpad:
   (dx=0, dy=-1) Norte -> VK_NUMPAD8
@@ -50,15 +53,15 @@ _DIR_TO_VK = {
 
 class MemoryWalker:
     """
-    Controla o movimento do personagem via SendInput (KEYEVENTF_SCANCODE).
+    Controla o movimento do personagem via PostMessage WM_KEYDOWN/WM_KEYUP.
 
-    Delega para KeyboardInjector.send_key_background(vk) que ja usa a
-    implementacao correta de SendInput para o Tibia 8.60.
+    Delega para KeyboardInjector.send_key_background(vk) que envia
+    PostMessage diretamente para a fila de mensagens do HWND alvo.
 
     Parametros do construtor:
         memory_writer:      ignorado (mantido por compatibilidade de assinatura
                             com BotEngine que passa memory_writer).
-        window_title_hint:  ignorado (SendInput nao usa HWND).
+        window_title_hint:  ignorado (PostMessage usa HWND, nao title hint).
     """
 
     DEFAULT_STEP_DELAY = 0.45
@@ -68,11 +71,11 @@ class MemoryWalker:
         self._log = get_logger("MemoryWalker")
         self._last_step_time: float = 0.0
 
-        # memory_writer ignorado nesta versao - SendInput nao usa WPM
+        # memory_writer ignorado nesta versao - PostMessage nao usa WPM
         if memory_writer is not None:
             self._log.debug(
                 "memory_writer recebido mas ignorado: "
-                "MemoryWalker v3 usa SendInput via KeyboardInjector."
+                "MemoryWalker v4 usa PostMessage via KeyboardInjector."
             )
 
     # ------------------------------------------------------------------
@@ -90,12 +93,12 @@ class MemoryWalker:
 
     def set_writer(self, memory_writer) -> None:
         """Mantido por compatibilidade - ignorado nesta versao."""
-        self._log.debug("set_writer() chamado - ignorado (v3 usa SendInput).")
+        self._log.debug("set_writer() chamado - ignorado (v4 usa PostMessage).")
 
     def set_hwnd(self, hwnd: int) -> None:
         """Mantido por compatibilidade - ignorado nesta versao."""
         self._log.debug(
-            f"set_hwnd({hwnd:#010x}) chamado - ignorado (SendInput nao usa HWND)."
+            f"set_hwnd({hwnd:#010x}) chamado - ignorado (HWND resolvido pelo injector)."
         )
 
     # ------------------------------------------------------------------
@@ -104,7 +107,7 @@ class MemoryWalker:
 
     def walk_to(self, current: Position, destination: Position) -> bool:
         """
-        Envia um passo de movimento via SendInput.
+        Envia um passo de movimento via PostMessage.
 
         Calcula a direcao (dx, dy) entre current e destination,
         mapeia para o VK Numpad correspondente e chama
@@ -138,11 +141,11 @@ class MemoryWalker:
             self._log.debug(
                 f"walk_to ({current.x},{current.y},{current.z}) -> "
                 f"({destination.x},{destination.y},{destination.z}) "
-                f"dir=({dx},{dy}) vk=0x{vk:02X} SendInput OK"
+                f"dir=({dx},{dy}) vk=0x{vk:02X} PostMessage OK"
             )
             return True
         except Exception as e:
-            self._log.error(f"walk_to SendInput erro: {e}", exc_info=True)
+            self._log.error(f"walk_to PostMessage erro: {e}", exc_info=True)
             return False
 
     def cooldown_passed(self, step_delay: float = DEFAULT_STEP_DELAY) -> bool:
