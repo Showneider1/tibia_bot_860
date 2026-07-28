@@ -4,18 +4,19 @@ KeyboardInjector - Injeta comandos de teclado no cliente Tibia 8.60.
 Historico de correcoes:
   fix-1: PostMessage -> SendMessage (sincrono) para movimento
   fix-2: SendMessage -> SendInput (background real, sem bloquear thread)
-  fix-3: WinError 87 - dwExtraInfo era POINTER(c_ulong), corrigido para
-         c_ulonglong. _anonymous_ em INPUT adicionado.
-  fix-4: WinError 87 persistia pois _anonymous_ ocultava a necessidade
-         do padding de 4 bytes entre 'type' e a union em 64-bit.
-         sizeof(INPUT) calculado pelo ctypes era 24; Windows exige 28.
-         Corrigido com campo '_pad' explicito (c_uint32) em INPUT.
-         SendInput agora envia KEYDOWN+KEYUP atomicamente (array de 2)
-         sem sleep() interno; sleep(35ms) pos-envio garante processamento.
+  fix-3: dwExtraInfo era POINTER(c_ulong); corrigido para c_ulonglong.
+  fix-4: assert sizeof(INPUT)==28 errado para 64-bit (correto: 32).
+         Padding manual (_pad, _pad_ki) causava sizeof=32 em 32-bit e
+         tamanhos errados em 64-bit. Removidos: ctypes calcula o padding
+         correto automaticamente quando os tipos sao declarados sem
+         campos de padding manuais.
+         sizeof esperado: 28 em 32-bit, 32 em 64-bit.
+         SendInput atomico (array[KEYDOWN, KEYUP]) mantido.
 
 Tibia 8.60 processa movimento via GetAsyncKeyState que le o estado
 global do teclado. SendInput injeta nesse fluxo sem exigir foco.
 """
+import sys
 import time
 import ctypes
 import ctypes.wintypes as wintypes
@@ -31,30 +32,15 @@ from src.core.interfaces.injector_interface import ICommandInjector
 from src.infrastructure.logging.logger import get_logger
 
 # ---------------------------------------------------------------------------
-# WinAPI structs para SendInput - layout exato do Windows SDK (64-bit)
+# WinAPI structs para SendInput
 #
-# Layout C esperado pelo Windows:
+# sizeof(INPUT) esperado pelo Windows:
+#   32-bit: DWORD(4) + union(24) = 28  [ULONG_PTR=4, KEYBDINPUT=16]
+#   64-bit: DWORD(4) + pad(4) + union(24) = 32  [ULONG_PTR=8, KEYBDINPUT=24]
 #
-#   typedef struct tagINPUT {
-#     DWORD     type;        // offset  0, size 4
-#     // padding implicito   // offset  4, size 4  <-- ctypes NAO insere isso
-#     union {                //             automaticamente sem _pad explicito
-#       KEYBDINPUT ki;       // offset  8, size 20
-#     };                     // total union: 20 bytes
-#   } INPUT;                 // sizeof == 28 bytes (alinhado a 8 bytes)
-#
-# KEYBDINPUT layout:
-#   WORD      wVk;           // offset  0, size 2
-#   WORD      wScan;         // offset  2, size 2
-#   DWORD     dwFlags;       // offset  4, size 4
-#   DWORD     time;          // offset  8, size 4
-#   // padding              // offset 12, size 4
-#   ULONG_PTR dwExtraInfo;   // offset 16, size 8
-#   // total: 24 bytes -> union size = 20 bytes (com padding final de 4?)
-#   // Na pratica sizeof(KEYBDINPUT) == 20 no SDK do Windows
-#
-# Estrategia: declarar INPUT com '_pad' explicito de 4 bytes apos 'type'.
-# Isso garante ki.wVk no offset correto e sizeof(INPUT) == 28.
+# NAO inserir campos de padding manual: o ctypes calcula automaticamente
+# o alinhamento correto para cada plataforma quando os tipos reais sao
+# declarados. Padding manual quebra o calculo em uma das arquiteturas.
 # ---------------------------------------------------------------------------
 
 INPUT_KEYBOARD        = 1
@@ -64,15 +50,17 @@ KEYEVENTF_EXTENDEDKEY = 0x0001
 
 
 class KEYBDINPUT(ctypes.Structure):
-    """sizeof deve ser 20 bytes (igual ao Windows SDK KEYBDINPUT em 64-bit)."""
+    """Layout identico ao KEYBDINPUT do Windows SDK."""
     _fields_ = [
-        ("wVk",         wintypes.WORD),       # 2 bytes, offset 0
-        ("wScan",       wintypes.WORD),       # 2 bytes, offset 2
-        ("dwFlags",     wintypes.DWORD),      # 4 bytes, offset 4
-        ("time",        wintypes.DWORD),      # 4 bytes, offset 8
-        ("_pad_ki",     wintypes.DWORD),      # 4 bytes, offset 12 (alinha dwExtraInfo a 8)
-        ("dwExtraInfo", ctypes.c_ulonglong),  # 8 bytes, offset 16
-    ]  # total: 24 bytes -- union padding alinhar ao maior membro (8): ok
+        ("wVk",         wintypes.WORD),
+        ("wScan",       wintypes.WORD),
+        ("dwFlags",     wintypes.DWORD),
+        ("time",        wintypes.DWORD),
+        # ULONG_PTR: 4 bytes em 32-bit, 8 bytes em 64-bit.
+        # c_ulonglong garante 8 bytes em ambos; o ctypes insere o padding
+        # de alinhamento necessario antes deste campo automaticamente.
+        ("dwExtraInfo", ctypes.c_ulonglong),
+    ]
 
 
 class _INPUT_UNION(ctypes.Union):
@@ -82,27 +70,28 @@ class _INPUT_UNION(ctypes.Union):
 
 
 class INPUT(ctypes.Structure):
-    """
-    sizeof(INPUT) deve ser 28 bytes em 64-bit.
-
-    '_pad' de 4 bytes apos 'type' e obrigatorio:
-    sem ele ctypes calcula sizeof==24 e SendInput retorna WinError 87.
-    NAO usar _anonymous_: ele oculta a necessidade do padding.
-    """
+    # _anonymous_ expoe 'ki' diretamente em INPUT (inp.ki.wVk)
+    _anonymous_ = ("u",)
     _fields_ = [
-        ("type",  wintypes.DWORD),   # 4 bytes, offset 0
-        ("_pad",  wintypes.DWORD),   # 4 bytes, offset 4  <-- CRITICO
-        ("union", _INPUT_UNION),     # 24 bytes, offset 8
+        ("type", wintypes.DWORD),
+        ("u",    _INPUT_UNION),
     ]
 
 
-# Valida o tamanho em tempo de importacao para detectar regressao rapido.
-assert ctypes.sizeof(INPUT) == 28, (
-    f"sizeof(INPUT)={ctypes.sizeof(INPUT)} != 28. "
-    "Padding da struct esta errado; SendInput vai retornar WinError 87."
-)
+# sizeof esperado:
+#   32-bit Python: 28
+#   64-bit Python: 32
+_POINTER_SIZE   = ctypes.sizeof(ctypes.c_void_p)
+_EXPECTED_SIZES = {4: 28, 8: 32}
+_EXPECTED_SIZE  = _EXPECTED_SIZES.get(_POINTER_SIZE)
+_INPUT_SIZE     = ctypes.sizeof(INPUT)
 
-_INPUT_SIZE = ctypes.sizeof(INPUT)  # == 28
+if _EXPECTED_SIZE is not None:
+    assert _INPUT_SIZE == _EXPECTED_SIZE, (
+        f"sizeof(INPUT)={_INPUT_SIZE} != {_EXPECTED_SIZE} "
+        f"(ponteiro={_POINTER_SIZE} bytes). "
+        "Layout da struct incorreto; SendInput vai retornar WinError 87."
+    )
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.SendInput.argtypes = [
@@ -153,14 +142,12 @@ def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
         flags |= KEYEVENTF_KEYUP
 
     inp = INPUT()
-    inp.type              = INPUT_KEYBOARD
-    inp._pad              = 0
-    inp.union.ki.wVk      = 0        # 0 obrigatorio com KEYEVENTF_SCANCODE
-    inp.union.ki.wScan    = scancode
-    inp.union.ki.dwFlags  = flags
-    inp.union.ki.time     = 0
-    inp.union.ki._pad_ki  = 0
-    inp.union.ki.dwExtraInfo = 0
+    inp.type           = INPUT_KEYBOARD
+    inp.ki.wVk         = 0
+    inp.ki.wScan       = scancode
+    inp.ki.dwFlags     = flags
+    inp.ki.time        = 0
+    inp.ki.dwExtraInfo = 0
     return inp
 
 
@@ -269,23 +256,19 @@ class KeyboardInjector(ICommandInjector):
         """
         Envia KEYDOWN + KEYUP via SendInput atomico (array de 2 eventos).
 
-        Por que atomico:
-          SendInput(2, [down, up], cbSize) injeta os dois eventos como um
-          bloco indivisivel no fluxo de input do Windows. Isso garante que
-          GetAsyncKeyState registre a transicao corretamente mesmo sob carga.
-          O sleep(25ms) anterior entre down e up causava WinError 87 no KEYUP
-          porque o GC podia coletar inp_down antes do Windows ler.
+        SendInput(2, [down, up], cbSize) injeta os dois eventos como bloco
+        indivisivel no fluxo de input do Windows, atualizando
+        GetAsyncKeyState sem exigir foco da janela alvo.
 
-        sleep(35ms) pos-envio: da tempo ao Tibia de processar
+        sleep(35ms) pos-envio: garante que o Tibia processe
         GetAsyncKeyState antes do proximo tick do cavebot.
         """
         inp_down = _build_input(vk_code, key_up=False)
         inp_up   = _build_input(vk_code, key_up=True)
 
-        # Array de 2 INPUTs para envio atomico
-        arr = (INPUT * 2)(inp_down, inp_up)
-
+        arr  = (INPUT * 2)(inp_down, inp_up)
         sent = _user32.SendInput(2, arr, _INPUT_SIZE)
+
         if sent != 2:
             err = ctypes.get_last_error()
             self._log.warning(
@@ -294,7 +277,6 @@ class KeyboardInjector(ICommandInjector):
             return
 
         self._log.debug(f"SendInput OK vk=0x{vk_code:02X}")
-        # Aguarda o Tibia processar a transicao de estado do teclado
         time.sleep(0.035)
 
     def _send_text_background(self, text: str) -> None:
