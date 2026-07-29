@@ -6,7 +6,7 @@ from src.core.entities.player import Player
 from src.core.entities.creature import Creature
 from src.core.value_objects.position import Position
 from .threat_analyzer import ThreatAnalyzer
-from .skill_rotation import SkillRotation, DruidRotation, SorcererRotation, KnightRotation, PaladinRotation
+from .skill_rotation import Skill, SkillRotation, DruidRotation, SorcererRotation, KnightRotation, PaladinRotation
 from src.infrastructure.logging.logger import get_logger
 
 
@@ -110,4 +110,19 @@ class CombatAI:
         creatures: List[Creature]
     ) -> Optional[Creature]:
         """Retorna melhor alvo baseado em análise de ameaças."""
-        re
+        return self.threat_analyzer.get_highest_threat(creatures, player)
+
+    def mark_skill_used(self, skill_name: str) -> None:
+        """Marca skill como usada para iniciar cooldown."""
+        for skill in self.skill_rotation.skills:
+            if skill.name == skill_name:
+                self.skill_rotation.mark_used(skill)
+                return
+
+    def get_next_skill(
+        self,
+        player: Player,
+        target: Optional[Creature] = None
+    ) -> Optional[Skill]:
+        """Retorna próxima skill disponível."""
+        return self.skill_rotation.get_next_skill(player, target)

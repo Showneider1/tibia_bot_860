@@ -1,16 +1,3 @@
-"""
-Aba de Healing - configuracao de auto-heal conectada ao HealingScript.
-
-Conexao com o script:
-    Todos os campos de entrada chamam _apply_to_script() ao perder foco
-    ou ao pressionar Enter, atualizando config do HealingScript em tempo real.
-
-F1.5 — Fix: _get_script() agora usa engine.script_engine.get_script("HealingBot")
-em vez de buscar em engine.scripts / engine._scripts (atributos que nao existem
-no BotEngine atual). Metodo correto: ScriptEngine.get_script().
-
-F1.3 — _apply_to_script() aciona schedule_save() no ProfileManager quando disponivel.
-"""
 import customtkinter as ctk
 from src.ui.theme import COLORS, FONTS
 
@@ -22,33 +9,19 @@ class HealingTab(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(3, weight=1)
-
-        # Variaveis ligadas aos campos de entrada
         self._vars: dict = {}
         self._build()
 
-    # ------------------------------------------------------------------
-    # Acesso ao HealingScript via BotEngine
-    # ------------------------------------------------------------------
-
     def _get_script(self):
-        """
-        Retorna a instancia de HealingScript do engine, ou None.
-
-        F1.5 FIX: usa engine.script_engine.get_script() — metodo oficial
-        do ScriptEngine — em vez de acessar engine.scripts / engine._scripts
-        que nao existem no BotEngine atual.
-        """
         engine = getattr(self.app, "bot_engine", None)
         if engine is None:
             return None
-        script_engine = getattr(engine, "script_engine", None)
-        if script_engine is None:
+        se = getattr(engine, "script_engine", None)
+        if se is None:
             return None
-        return script_engine.get_script("HealingBot")
+        return se.get_script("HealingBot")
 
     def _apply_to_script(self, key: str, cast=str) -> None:
-        """Sincroniza o campo 'key' com a config do HealingScript."""
         script = self._get_script()
         if script is None:
             return
@@ -56,15 +29,12 @@ class HealingTab(ctk.CTkFrame):
         if var is None:
             return
         try:
-            value = cast(var.get())
-            script.config[key] = value
-            # F1.3 — agenda save de perfil se ProfileManager disponivel
+            script.config[key] = cast(var.get())
             self._schedule_profile_save()
         except (ValueError, TypeError):
-            pass  # valor invalido; nao altera o script
+            pass
 
     def _schedule_profile_save(self) -> None:
-        """Aciona debounce de save no ProfileManager, se disponivel."""
         engine = getattr(self.app, "bot_engine", None)
         if engine is None:
             return
@@ -77,7 +47,6 @@ class HealingTab(ctk.CTkFrame):
         pm.schedule_save(player.name, engine.script_engine)
 
     def _read_from_script(self) -> None:
-        """Carrega os valores atuais do HealingScript nos campos da UI."""
         script = self._get_script()
         if script is None:
             return
@@ -91,6 +60,7 @@ class HealingTab(ctk.CTkFrame):
             "spell_strong":    ("spell_strong", str),
             "spell_ultimate":  ("spell_ult",    str),
             "spell_mana_drain":("spell_mana",   str),
+            "mana_min_for_sd": ("mana_min",     float),
             "cooldown":        ("cooldown",      str),
             "dps_threshold":   ("dps_thresh",   str),
         }
@@ -99,46 +69,40 @@ class HealingTab(ctk.CTkFrame):
             if var and cfg_key in script.config:
                 var.set(str(script.config[cfg_key]))
 
-    # ------------------------------------------------------------------
-    # Construcao da UI
-    # ------------------------------------------------------------------
-
     def _build(self):
         ctk.CTkLabel(self, text="Healing", font=FONTS["title"],
                      text_color=COLORS["text_primary"]).grid(
-            row=0, column=0, columnspan=2, padx=24, pady=(20, 4), sticky="w")
-        ctk.CTkLabel(self, text="Configure cura automatica de HP e Mana",
+            row=0, column=0, columnspan=2, padx=16, pady=(14, 2), sticky="w")
+        ctk.CTkLabel(self, text="Cura automatica de HP e Mana",
                      font=FONTS["small"], text_color=COLORS["text_faint"]).grid(
-            row=1, column=0, columnspan=2, padx=24, pady=(0, 16), sticky="w")
+            row=1, column=0, columnspan=2, padx=16, pady=(0, 10), sticky="w")
 
-        # Botao sincronizar
         ctk.CTkButton(
             self, text="Carregar do Script", font=FONTS["small"],
-            height=26, corner_radius=8,
+            height=24, corner_radius=6,
             fg_color=COLORS["bg_panel"], hover_color=COLORS["bg_hover"],
             text_color=COLORS["accent_light"],
             command=self._read_from_script,
-        ).grid(row=0, column=1, padx=24, pady=(20, 4), sticky="e")
+        ).grid(row=0, column=1, padx=16, pady=(14, 2), sticky="e")
 
         self._hp_card(row=2, col=0)
         self._mana_card(row=2, col=1)
         self._spell_card(row=3)
 
     def _entry(self, parent, row, col, label, var_key, default, cfg_key=None, cast=float,
-                padx_l=(16, 8), padx_r=(0, 16)):
-        """Cria label + entry com binding automatico ao script."""
+                padx_l=(12, 6), padx_r=(0, 12)):
         var = ctk.StringVar(value=default)
         self._vars[var_key] = var
 
         ctk.CTkLabel(parent, text=label, font=FONTS["small"],
                      text_color=COLORS["text_faint"]).grid(
-            row=row, column=0, padx=padx_l, pady=5, sticky="w")
+            row=row, column=0, padx=padx_l, pady=3, sticky="w")
         entry = ctk.CTkEntry(
-            parent, textvariable=var, height=32, corner_radius=8,
+            parent, textvariable=var, height=28, corner_radius=6,
             fg_color=COLORS["bg_input"], border_color=COLORS["border"],
             text_color=COLORS["text_label"], font=FONTS["body"],
         )
-        entry.grid(row=row, column=1, padx=padx_r, pady=5, sticky="ew")
+        entry.grid(row=row, column=1, padx=padx_r, pady=3, sticky="ew")
 
         if cfg_key:
             entry.bind("<FocusOut>", lambda e: self._apply_to_script(cfg_key, cast))
@@ -152,11 +116,11 @@ class HealingTab(ctk.CTkFrame):
         self._enabled_hp = ctk.BooleanVar(value=True)
         sw = ctk.CTkSwitch(
             card, text="Ativo", variable=self._enabled_hp,
-            font=FONTS["body"], text_color=COLORS["text_label"],
+            font=FONTS["small"], text_color=COLORS["text_label"],
             progress_color=COLORS["hp_red"],
             command=lambda: self._apply_bool_to_script("enable_dps_healing", self._enabled_hp),
         )
-        sw.grid(row=1, column=0, columnspan=2, padx=16, pady=(6, 12), sticky="w")
+        sw.grid(row=1, column=0, columnspan=2, padx=12, pady=(4, 8), sticky="w")
 
         self._entry(card, 2, 0, "Usar abaixo de (%)",  "hp_pct",      "60",  "hp_threshold",   float)
         self._entry(card, 3, 0, "Spell leve",           "spell_light", "exura","spell_light",   str)
@@ -170,9 +134,9 @@ class HealingTab(ctk.CTkFrame):
         self._enabled_mana = ctk.BooleanVar(value=True)
         ctk.CTkSwitch(
             card, text="Ativo", variable=self._enabled_mana,
-            font=FONTS["body"], text_color=COLORS["text_label"],
+            font=FONTS["small"], text_color=COLORS["text_label"],
             progress_color=COLORS["mana_blue"],
-        ).grid(row=1, column=0, columnspan=2, padx=16, pady=(6, 12), sticky="w")
+        ).grid(row=1, column=0, columnspan=2, padx=12, pady=(4, 8), sticky="w")
 
         self._entry(card, 2, 0, "Usar abaixo de (%)", "mana_pct",   "40",         "mana_threshold",  float)
         self._entry(card, 3, 0, "Spell mana drain",   "spell_mana", "exura sio",  "spell_mana_drain",str)
@@ -180,49 +144,41 @@ class HealingTab(ctk.CTkFrame):
         self._entry(card, 5, 0, "DPS threshold",      "dps_thresh", "80",         "dps_threshold",   float)
 
     def _spell_card(self, row):
-        card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=14,
+        card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=12,
                             border_width=1, border_color=COLORS["border"])
-        card.grid(row=row, column=0, columnspan=2, padx=24, pady=(8, 24), sticky="nsew")
+        card.grid(row=row, column=0, columnspan=2, padx=16, pady=(6, 16), sticky="nsew")
         card.grid_columnconfigure((0, 1, 2), weight=1)
 
         ctk.CTkLabel(card, text="SPELLS DE EMERGENCIA",
                      font=FONTS["badge"], text_color=COLORS["accent_light"]).grid(
-            row=0, column=0, columnspan=3, padx=16, pady=(14, 10), sticky="w")
+            row=0, column=0, columnspan=3, padx=12, pady=(10, 6), sticky="w")
 
         specs = [
-            ("Critico HP",    "spell_ult",  "exura vita",       "hp_ultimate",  "20", "spell_ultimate",  "hp_ultimate"),
-            ("Critico Mana",  "spell_ult2", "exura gran mas",   "hp_mana",      "15", "spell_mana_drain","hp_mana_drain"),
-            ("Ult. Recurso",  "spell_sac",  "utana vid",        "hp_sac",       "10", "spell_sacrifice", "sacrifice_hp_threshold"),
+            ("Critico HP",    "spell_ult",  "exura vita",       "hp_ultimate",  "20"),
+            ("Critico Mana",  "spell_ult2", "exura gran mas",   "hp_mana",      "15"),
+            ("Ult. Recurso",  "spell_sac",  "utana vid",        "hp_sac",       "10"),
         ]
-        for c, (lbl, sk, sv, pk, pv, scfg_s, scfg_p) in enumerate(specs):
+        for c, (lbl, sk, sv, pk, pv) in enumerate(specs):
             ctk.CTkLabel(card, text=lbl, font=FONTS["subhead"],
-                         text_color=COLORS["text_label"]).grid(row=1, column=c, padx=16, pady=4)
+                         text_color=COLORS["text_label"]).grid(row=1, column=c, padx=10, pady=2)
 
             sv_var = ctk.StringVar(value=sv)
             self._vars[sk] = sv_var
             spell_e = ctk.CTkEntry(
-                card, textvariable=sv_var, height=32, corner_radius=8,
+                card, textvariable=sv_var, height=28, corner_radius=6,
                 fg_color=COLORS["bg_input"], border_color=COLORS["border"],
                 text_color=COLORS["text_label"], font=FONTS["body"],
             )
-            spell_e.grid(row=2, column=c, padx=12, pady=4, sticky="ew")
-            spell_e.bind("<FocusOut>", lambda e, k=scfg_s: self._apply_to_script(k, str))
-            spell_e.bind("<Return>",   lambda e, k=scfg_s: self._apply_to_script(k, str))
+            spell_e.grid(row=2, column=c, padx=8, pady=2, sticky="ew")
 
             pct_var = ctk.StringVar(value=pv)
             self._vars[pk] = pct_var
             pct_e = ctk.CTkEntry(
-                card, textvariable=pct_var, height=32, corner_radius=8,
+                card, textvariable=pct_var, height=28, corner_radius=6,
                 fg_color=COLORS["bg_input"], border_color=COLORS["border"],
                 text_color=COLORS["text_label"], font=FONTS["body"],
             )
-            pct_e.grid(row=3, column=c, padx=12, pady=4, sticky="ew")
-            pct_e.bind("<FocusOut>", lambda e, k=scfg_p: self._apply_to_script(k, float))
-            pct_e.bind("<Return>",   lambda e, k=scfg_p: self._apply_to_script(k, float))
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+            pct_e.grid(row=3, column=c, padx=8, pady=2, sticky="ew")
 
     def _apply_bool_to_script(self, key: str, var: ctk.BooleanVar) -> None:
         script = self._get_script()
@@ -231,14 +187,14 @@ class HealingTab(ctk.CTkFrame):
             self._schedule_profile_save()
 
     def _card(self, row, col, title):
-        card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=14,
+        card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=12,
                             border_width=1, border_color=COLORS["border"])
         card.grid(
             row=row, column=col,
-            padx=(24 if col == 0 else 8, 8 if col == 0 else 24),
-            pady=(0, 8), sticky="nsew",
+            padx=(16 if col == 0 else 6, 6 if col == 0 else 16),
+            pady=(0, 6), sticky="nsew",
         )
         ctk.CTkLabel(card, text=title, font=FONTS["badge"],
                      text_color=COLORS["accent_light"]).grid(
-            row=0, column=0, columnspan=2, padx=16, pady=(14, 4), sticky="w")
+            row=0, column=0, columnspan=2, padx=12, pady=(10, 2), sticky="w")
         return card

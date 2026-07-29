@@ -10,25 +10,20 @@ Diagnostico historico:
   v3 - SendInput via KeyboardInjector.send_key_background(vk).
        SendInput atualiza GetAsyncKeyState globalmente, mas so funciona
        quando a janela tem foreground focus.
-  v4 (atual) - PostMessage WM_KEYDOWN/WM_KEYUP via KeyboardInjector.
-       PostMessage envia diretamente para a fila de mensagens do HWND alvo.
-       Funciona em background. Movimento usa VK Numpad (Tibia processa
-       mesmo com chat aberto). Metodo identico ao ElfBot/XenoBot.
+  v4 - PostMessage WM_KEYDOWN/WM_KEYUP via KeyboardInjector com VK Numpad.
+       PostMessage com VK_NUMPAD* nao funciona porque Tibia interpreta
+       como numero no chat (GetKeyState(VK_NUMLOCK) retorna estado real
+       do teclado, nao o estado simulado pelo PostMessage).
+  v5 (atual) - PostMessage WM_KEYDOWN/WM_KEYUP com arrow keys (VK_UP/DOWN
+       /LEFT/RIGHT). Setas funcionam SEMPRE que o chat esta fechado.
+       Fecha o chat com VK_ESCAPE antes de cada passo.
+       Diagonais usam duas setas em sequencia (50ms entre elas).
 
 Arquitetura:
-  walk_to(current, destination) calcula dx/dy, mapeia para VK Numpad e
+  walk_to(current, destination) calcula dx/dy, mapeia para arrow keys e
   delega para self._injector.send_key_background(vk). O injector usa
   PostMessage para enviar ao HWND do processo alvo.
-
-Mapa direcional Numpad:
-  (dx=0, dy=-1) Norte -> VK_NUMPAD8
-  (dx=0, dy=+1) Sul   -> VK_NUMPAD2
-  (dx=-1,dy=0)  Oeste -> VK_NUMPAD4
-  (dx=+1,dy=0)  Leste -> VK_NUMPAD6
-  (dx=-1,dy=-1) NW    -> VK_NUMPAD7
-  (dx=+1,dy=-1) NE    -> VK_NUMPAD9
-  (dx=-1,dy=+1) SW    -> VK_NUMPAD1
-  (dx=+1,dy=+1) SE    -> VK_NUMPAD3
+  Antes de cada tecla de movimento, envia VK_ESCAPE para fechar o chat.
 """
 import time
 from typing import Optional
@@ -38,16 +33,22 @@ import win32con
 from src.core.value_objects.position import Position
 from src.infrastructure.logging.logger import get_logger
 
-# Mapa (dx, dy) -> VK code Numpad
+_DIAGONAL_DELAY = 0.030
+
+# Mapa (dx, dy) -> lista de VK codes (arrow keys)
+# Tibia 8.60: arrow keys movem o personagem quando o chat esta fechado.
+# Numpad keys (VK_NUMPAD*) seriam interpretadas como numeros se o chat
+# estivesse aberto, ou dependeriam de GetKeyState(VK_NUMLOCK).
+# Arrow keys nao tem essa dependencia.
 _DIR_TO_VK = {
-    ( 0, -1): win32con.VK_NUMPAD8,  # Norte
-    ( 0,  1): win32con.VK_NUMPAD2,  # Sul
-    (-1,  0): win32con.VK_NUMPAD4,  # Oeste
-    ( 1,  0): win32con.VK_NUMPAD6,  # Leste
-    (-1, -1): win32con.VK_NUMPAD7,  # Noroeste
-    ( 1, -1): win32con.VK_NUMPAD9,  # Nordeste
-    (-1,  1): win32con.VK_NUMPAD1,  # Sudoeste
-    ( 1,  1): win32con.VK_NUMPAD3,  # Sudeste
+    ( 0, -1): [win32con.VK_UP],          # Norte
+    ( 0,  1): [win32con.VK_DOWN],        # Sul
+    (-1,  0): [win32con.VK_LEFT],        # Oeste
+    ( 1,  0): [win32con.VK_RIGHT],       # Leste
+    (-1, -1): [win32con.VK_LEFT, win32con.VK_UP],    # NW
+    ( 1, -1): [win32con.VK_RIGHT, win32con.VK_UP],   # NE
+    (-1,  1): [win32con.VK_LEFT, win32con.VK_DOWN],  # SW
+    ( 1,  1): [win32con.VK_RIGHT, win32con.VK_DOWN], # SE
 }
 
 
@@ -110,10 +111,10 @@ class MemoryWalker:
         Envia um passo de movimento via PostMessage.
 
         Calcula a direcao (dx, dy) entre current e destination,
-        mapeia para o VK Numpad correspondente e chama
-        self._injector.send_key_background(vk).
+        fecha o chat (VK_ESCAPE), e envia a(s) tecla(s) de seta
+        correspondente(s). Diagonais enviam duas setas em sequencia.
 
-        Retorna True se a tecla foi enviada com sucesso.
+        Retorna True se a(s) tecla(s) foram enviadas com sucesso.
         """
         if self._injector is None:
             self._log.error(
@@ -130,18 +131,24 @@ class MemoryWalker:
             self._log.debug("walk_to: current == destination, sem movimento.")
             return False
 
-        vk = _DIR_TO_VK.get((dx, dy))
-        if vk is None:
+        vk_list = _DIR_TO_VK.get((dx, dy))
+        if vk_list is None:
             self._log.warning(f"walk_to: direcao ({dx},{dy}) nao mapeada.")
             return False
 
         try:
-            self._injector.send_key_background(vk)
+            for i, vk in enumerate(vk_list):
+                self._injector.send_key_background(vk)
+                if i < len(vk_list) - 1:
+                    time.sleep(_DIAGONAL_DELAY)
+
             self._last_step_time = time.time()
+            dir_name = {(-1,-1):"NW",(0,-1):"N",(1,-1):"NE",(-1,0):"W",
+                        (1,0):"E",(-1,1):"SW",(0,1):"S",(1,1):"SE"}.get((dx,dy),"?")
             self._log.debug(
                 f"walk_to ({current.x},{current.y},{current.z}) -> "
                 f"({destination.x},{destination.y},{destination.z}) "
-                f"dir=({dx},{dy}) vk=0x{vk:02X} PostMessage OK"
+                f"dir={dir_name} vk={[hex(v) for v in vk_list]}"
             )
             return True
         except Exception as e:

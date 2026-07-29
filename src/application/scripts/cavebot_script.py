@@ -23,6 +23,7 @@ Historico de correcoes:
              Corrigido: walk_to(current_pos, next_step).
 """
 import time
+import win32con
 from typing import Dict, Any, List, Optional
 from .base_script import BaseScript
 from src.core.entities.player import Player
@@ -45,13 +46,12 @@ class CavebotScript(BaseScript):
             "use_pathfinding": True,
 
             # step_delay: intervalo minimo entre passos (segundos).
-            # Tibia 8.60 walk speed ~470ms; 0.45s e seguro sem travar o loop.
-            "step_delay": 0.45,
+            "step_delay": 0.35,
 
             # Anti-stuck
             "enable_anti_stuck": True,
-            "stuck_timeout": 8.0,
-            "stuck_retries": 3,
+            "stuck_timeout": 2.0,
+            "stuck_retries": 5,
 
             # Follow
             "enable_follow": False,
@@ -67,12 +67,16 @@ class CavebotScript(BaseScript):
         self._current_waypoint_index = 0
         self._stuck_counter = 0
         self._last_position: Optional[Position] = None
+        self._pending_move_position: Optional[Position] = None
+        self._pending_move_time: float = 0.0
         self._last_move_time = 0.0
         self._last_step_time = 0.0
+        self._wait_until = 0.0
         self._pathfinder = Pathfinder()
         self._current_path: List[Position] = []
         self._follow_target: Optional[Creature] = None
         self._last_follow_position: Optional[Position] = None
+        self._blocked_tiles: set = set()
 
     # ------------------------------------------------------------------
     # Ciclo de vida
@@ -85,9 +89,13 @@ class CavebotScript(BaseScript):
         self._current_waypoint_index = 0
         self._current_path    = []
         self._stuck_counter   = 0
+        self._wait_until      = 0.0
         self._last_position   = None
+        self._pending_move_position = None
+        self._pending_move_time = 0.0
         self._follow_target   = None
         self._last_follow_position = None
+        self._blocked_tiles.clear()
         self._log.info("CaveBot ativado - contadores resetados.")
 
     def on_disable(self) -> None:
@@ -185,6 +193,10 @@ class CavebotScript(BaseScript):
 
         if player.position.x <= 0 or player.position.y <= 0:
             self._log.debug("Posicao invalida (0,0,0), aguardando sincronizacao...")
+            return False
+
+        # Aguardando ação "wait" completar
+        if time.time() < self._wait_until:
             return False
 
         if self._current_waypoint_index >= len(waypoints):
@@ -303,6 +315,8 @@ class CavebotScript(BaseScript):
         if ok:
             self._last_move_time = time.time()
             self._last_step_time = time.time()
+            self._pending_move_position = next_step
+            self._pending_move_time = time.time()
         return ok
 
     def _move_towards(
@@ -311,11 +325,42 @@ class CavebotScript(BaseScript):
         """
         Movimento direto (sem pathfinding):
         calcula o proximo tile na direcao do alvo e envia via MemoryWalker.
+        Se o tile direto estiver bloqueado, tenta as outras direcoes ortogonais
+        em ordem de preferencia (mais proximo do alvo primeiro).
         """
+        if not player.position:
+            return False
         dx = max(-1, min(1, target.x - player.position.x))
         dy = max(-1, min(1, target.y - player.position.y))
         if dx == 0 and dy == 0:
             return False
+
+        # Tenta a direcao preferencial primeiro; se bloqueada, tenta as outras
+        candidates = [(dx, dy)]
+        for odx, ody in [(dx, 0), (0, dy), (-dx, 0), (0, -dy), (-dx, -dy)]:
+            cand = (odx, ody)
+            if cand != (dx, dy) and cand != (0, 0) and cand not in candidates:
+                candidates.append(cand)
+        # Filtra candidatos redundantes e (0,0)
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c != (0, 0) and c not in seen:
+                seen.add(c)
+                unique.append(c)
+
+        for cdx, cdy in unique:
+            next_step = Position(
+                player.position.x + cdx,
+                player.position.y + cdy,
+                player.position.z,
+            )
+            next_key = (next_step.x, next_step.y, next_step.z)
+            if next_key in self._blocked_tiles:
+                continue
+            return self._move_player(player.position, next_step, bot_engine)
+
+        # Todas bloqueadas — tenta a direcao original mesmo sabendo que pode falhar
         next_step = Position(
             player.position.x + dx,
             player.position.y + dy,
@@ -330,6 +375,27 @@ class CavebotScript(BaseScript):
     def _is_stuck(self, player: Player) -> bool:
         if time.time() - self._last_move_time < self.config["stuck_timeout"]:
             return False
+
+        if self._pending_move_position and player.position == self._pending_move_position:
+            self._pending_move_position = None
+            self._pending_move_time = 0.0
+            self._last_position = player.position
+            self._stuck_counter = 0
+            self._blocked_tiles.clear()
+            return False
+
+        if self._pending_move_position and time.time() - self._pending_move_time > 0.6:
+            key = (self._pending_move_position.x, self._pending_move_position.y, self._pending_move_position.z)
+            self._blocked_tiles.add(key)
+            self._log.warning(
+                f"Tile bloqueado ({self._pending_move_position.x},{self._pending_move_position.y})! "
+                f"{self._stuck_counter+1}/{self.config['stuck_retries']}"
+            )
+            self._pending_move_position = None
+            self._pending_move_time = 0.0
+            self._stuck_counter += 1
+            return True
+
         if self._last_position and self._last_position == player.position:
             self._stuck_counter += 1
             self._log.warning(
@@ -341,6 +407,8 @@ class CavebotScript(BaseScript):
         return False
 
     def _handle_stuck(self) -> None:
+        self._pending_move_position = None
+        self._pending_move_time = 0.0
         if self._stuck_counter >= self.config["stuck_retries"]:
             self._log.warning("Stuck prolongado! Pulando waypoint...")
             self._next_waypoint(len(self.config.get("waypoints", [])))
@@ -379,17 +447,52 @@ class CavebotScript(BaseScript):
         if not hasattr(waypoint, "action") or not waypoint.action:
             return
         action = waypoint.action.lower()
+        meta = waypoint.metadata or {}
+
         if action == "deposit":
             self._log.info("Depositando items no depot...")
         elif action == "refuel":
             self._log.info("Reabastecendo supplies...")
         elif action == "wait":
-            self._log.info("Aguardando no waypoint...")
-            time.sleep(2)
+            duration = meta.get("wait_time", 2)
+            self._log.info(f"Aguardando no waypoint ({duration}s)...")
+            self._wait_until = time.time() + duration
         elif action.startswith("say:"):
             msg = action.split(":", 1)[1]
-            bot_engine.injector.cast_spell(msg)
+            bot_engine.injector.say(msg)
             self._log.info(f"Dizendo: {msg}")
+
+        elif action == "rope":
+            hotkey = meta.get("hotkey", self.config.get("rope_hotkey", "F2"))
+            self._log.info(f"Usando corda (hotkey {hotkey})...")
+            bot_engine.injector.send_hotkey(hotkey)
+            self._wait_until = time.time() + 1.5
+
+        elif action == "shovel":
+            hotkey = meta.get("hotkey", self.config.get("shovel_hotkey", "F3"))
+            self._log.info(f"Usando pa (hotkey {hotkey})...")
+            bot_engine.injector.send_hotkey(hotkey)
+            self._wait_until = time.time() + 1.5
+
+        elif action == "ladder":
+            direction = meta.get("direction", "up")
+            self._log.info(f"Usando escada ({direction})...")
+            if direction == "up":
+                bot_engine.injector.send_key_background(win32con.VK_UP)
+            else:
+                bot_engine.injector.send_key_background(win32con.VK_DOWN)
+            self._wait_until = time.time() + 1.0
+
+        elif action == "use":
+            hotkey = meta.get("hotkey", self.config.get("use_hotkey", "F4"))
+            self._log.info(f"Usando item (hotkey {hotkey})...")
+            bot_engine.injector.send_hotkey(hotkey)
+            self._wait_until = time.time() + 2.0
+
+        elif action == "lure":
+            wait = meta.get("wait_time", 3)
+            self._log.info(f"Lure ativo: aguardando {wait}s para as criaturas...")
+            self._wait_until = time.time() + wait
 
     # ------------------------------------------------------------------
     # Controle de indice
@@ -416,6 +519,7 @@ class CavebotScript(BaseScript):
         self.config["waypoints"] = []
         self._current_waypoint_index = 0
         self._current_path = []
+        self._blocked_tiles.clear()
 
     def start_follow(self, target_name: str, distance: int = 2) -> None:
         self.config["enable_follow"] = True

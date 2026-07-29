@@ -1,16 +1,3 @@
-"""
-Janela principal do TibiaBot 860 UI.
-
-Fluxo de dados:
-  - Sem bot_engine: UI exibe zeros, sem simulacao
-  - Com bot_engine: _start_engine_loop() le memoria real a cada 150ms
-    e chama update_from_engine() para atualizar a tela
-
-Integracao com BotEngine:
-    app = BotApp()
-    app.set_bot_engine(bot_engine)  # registra scripts e injeta engine
-    app.run()
-"""
 import threading
 import time
 import customtkinter as ctk
@@ -19,40 +6,34 @@ from src.ui.theme import COLORS, FONTS
 from src.ui.widgets.sidebar import Sidebar
 from src.ui.tabs.status_tab import StatusTab
 from src.ui.tabs.healing_tab import HealingTab
+from src.ui.tabs.aimbot_tab import AimbotTab
 from src.ui.tabs.cavebot_tab import CavebotTab
 from src.ui.tabs.settings_tab import SettingsTab
+from src.ui.tabs.looter_tab import LooterTab
+from src.ui.tabs.persistent_tab import PersistentTab
 from src.ui.widgets.log_panel import LogPanel
 from src.application.scripts.healing_script import HealingScript
 from src.application.scripts.buff_script import BuffScript
 from src.application.scripts.aimbot_script import AimbotScript
 from src.application.scripts.cavebot_script import CavebotScript
 from src.application.scripts.looter_script import LooterScript
+from src.application.scripts.persistent_script import PersistentScript
 
 
 class BotApp:
-    """
-    Janela principal da UI do TibiaBot 860.
-
-    Atributos publicos:
-        bot_engine: instancia de BotEngine a ser injetada via set_bot_engine().
-                    Se None, a UI funciona em modo demo (dados zerados).
-        _player_data: dict com os dados atuais do player exibidos na UI.
-    """
-
     def __init__(self):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
 
         self.root = ctk.CTk()
         self.root.title("TibiaBot 860")
-        self.root.geometry("1140x740")
-        self.root.minsize(900, 620)
+        self.root.geometry("1100x680")
+        self.root.minsize(860, 560)
         self.root.configure(fg_color=COLORS["bg_dark"])
 
         self.bot_running = False
         self.bot_engine = None
 
-        # Dados exibidos na UI — inicialmente zerados.
         self._player_data = {
             "name":     "--",
             "level":    0,
@@ -67,59 +48,31 @@ class BotApp:
         self._build_ui()
         self._bind_events()
 
-    # ------------------------------------------------------------------
-    # Integracao com BotEngine
-    # ------------------------------------------------------------------
-
     def set_bot_engine(self, engine) -> None:
-        """
-        Injeta o BotEngine e registra os scripts padrao no script_engine.
-
-        Substitui a atribuicao direta `app.bot_engine = engine`.
-        Deve ser chamado ANTES de app.run().
-        """
         self.bot_engine = engine
         self._register_default_scripts()
 
     def _register_default_scripts(self) -> None:
-        """
-        Registra todos os scripts built-in no script_engine do BotEngine.
-
-        Idempotente: so registra se o script ainda nao estiver na lista.
-        Todos iniciam desativados (enabled=False); a UI controla a
-        ativacao individual de cada um (HealingTab, CavebotTab, etc.).
-
-        Prioridades (maior = executa primeiro):
-            HealingScript : 100
-            BuffScript    :  90
-            AimbotScript  :  50
-            CavebotScript :  30
-            LooterScript  :  20
-        """
         if self.bot_engine is None:
             return
         se = self.bot_engine.script_engine
         registered = {s["name"] for s in se.list_scripts()}
 
-        # Ordem explicita para legibilidade nos logs de registro
         builtins = [
             ("HealingBot", HealingScript),
             ("BuffManager", BuffScript),
             ("AimBot",      AimbotScript),
             ("CaveBot",     CavebotScript),
             ("Looter",      LooterScript),
+            ("Persistent",  PersistentScript),
         ]
         for name, script_cls in builtins:
             if name not in registered:
                 script = script_cls()
-                script.enabled = False   # UI controla ativacao
+                script.enabled = False
                 se.register(script)
 
     def update_from_engine(self, player) -> None:
-        """
-        Atualiza _player_data com os dados lidos da memoria pelo BotEngine.
-        Thread-safe: agenda refresh da UI via root.after().
-        """
         if player is None:
             return
 
@@ -145,10 +98,6 @@ class BotApp:
 
         self.root.after(0, self._tabs["status"].refresh)
 
-    # ------------------------------------------------------------------
-    # Construcao da UI
-    # ------------------------------------------------------------------
-
     def _build_ui(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
@@ -164,10 +113,13 @@ class BotApp:
         self._content.grid_columnconfigure(0, weight=1)
 
         self._tabs = {
-            "status":   StatusTab(self._content, self),
-            "healing":  HealingTab(self._content, self),
-            "cavebot":  CavebotTab(self._content, self),
-            "settings": SettingsTab(self._content, self),
+            "status":     StatusTab(self._content, self),
+            "healing":    HealingTab(self._content, self),
+            "aimbot":     AimbotTab(self._content, self),
+            "cavebot":    CavebotTab(self._content, self),
+            "looter":     LooterTab(self._content, self),
+            "persistent": PersistentTab(self._content, self),
+            "settings":   SettingsTab(self._content, self),
         }
         for tab in self._tabs.values():
             tab.grid(row=0, column=0, sticky="nsew")
@@ -180,19 +132,11 @@ class BotApp:
     def _bind_events(self) -> None:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ------------------------------------------------------------------
-    # Navegacao
-    # ------------------------------------------------------------------
-
     def show_tab(self, name: str) -> None:
         for key, tab in self._tabs.items():
             if key == name:
                 tab.tkraise()
         self.sidebar.set_active(name)
-
-    # ------------------------------------------------------------------
-    # Controle do bot
-    # ------------------------------------------------------------------
 
     def toggle_bot(self) -> None:
         self.bot_running = not self.bot_running
@@ -204,26 +148,24 @@ class BotApp:
         if self.bot_running:
             self._connect_engine()
         else:
-            # Pausa o engine sem desconectar
             if self.bot_engine:
                 self.bot_engine.enabled = False
 
     def _connect_engine(self) -> None:
         if self.bot_engine is None:
             self.log_panel.log(
-                "[DEMO] Sem BotEngine injetado. Dados reais exigem set_bot_engine().",
+                "[DEMO] Sem BotEngine injetado.",
                 COLORS["text_faint"],
             )
             return
 
         ok = self.bot_engine.start()
         if ok:
-            # BUG 1 CORRIGIDO: engine.enabled deve ser True para tick() rodar os scripts
             self.bot_engine.enabled = True
-            self.log_panel.log("Conectado ao Tibia. Lendo memoria...", COLORS["online_green"])
+            self.log_panel.log("Conectado ao Tibia.", COLORS["online_green"])
             self._start_engine_loop()
         else:
-            self.log_panel.log("Falha ao conectar. O Tibia esta aberto?", COLORS["warn_yellow"])
+            self.log_panel.log("Falha ao conectar.", COLORS["warn_yellow"])
             self.bot_running = False
             self.sidebar.update_bot_status(False)
 
@@ -240,16 +182,12 @@ class BotApp:
                     self.root.after(
                         0,
                         lambda e=exc: self.log_panel.log(
-                            f"Erro no engine: {e}", COLORS["warn_yellow"]
+                            f"Erro: {e}", COLORS["warn_yellow"]
                         ),
                     )
                 time.sleep(0.15)
 
         threading.Thread(target=_loop, daemon=True, name="BotEngineLoop").start()
-
-    # ------------------------------------------------------------------
-    # Utilitarios
-    # ------------------------------------------------------------------
 
     def log(self, msg: str, color: str = None) -> None:
         self.log_panel.log(msg, color)
@@ -262,7 +200,7 @@ class BotApp:
 
     def run(self) -> None:
         self.log_panel.log(
-            "TibiaBot 860 iniciado. Clique em INICIAR BOT para conectar.",
+            "TibiaBot 860 iniciado.",
             COLORS["text_muted"],
         )
         self._tabs["status"].refresh()

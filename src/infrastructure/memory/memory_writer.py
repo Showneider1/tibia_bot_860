@@ -30,7 +30,7 @@ class MemoryWriter(IMemoryWriter):
         return self._pm.process_handle
 
     def write_int(self, address: MemoryAddress, value: int) -> bool:
-        data = int(value).to_bytes(4, "little", signed=False)
+        data = int(value).to_bytes(4, "little", signed=True)
         bytes_written = ctypes.c_size_t(0)
         ok = kernel32.WriteProcessMemory(
             self._handle, ctypes.c_uint32(address.value), data, len(data), ctypes.byref(bytes_written)

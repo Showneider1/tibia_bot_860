@@ -12,6 +12,7 @@ class Creature:
     stats: Stats
     visible: bool
     walking: bool
+    battle_slot: int = -1
 
     def is_alive(self) -> bool:
         return self.stats.health > 0

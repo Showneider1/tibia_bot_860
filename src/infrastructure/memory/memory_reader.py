@@ -183,7 +183,7 @@ class MemoryReader(IMemoryReader):
             ctypes.byref(bytes_read),
         )
 
-        if not ok and bytes_read.value == 0:
+        if not ok:
             err = ctypes.get_last_error()
             raise MemoryReadError(
                 f"Falha ao ler string em {address} "

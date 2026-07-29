@@ -120,9 +120,18 @@ class BotEngine:
         return self._walker
 
     @property
+    def memory_reader(self) -> MemoryReader:
+        """MemoryReader direto, para leitura avancada pelos scripts."""
+        return self._memory
+
+    @property
     def memory_writer(self) -> MemoryWriter:
         """MemoryWriter direto, para uso avancado pelos scripts."""
         return self._memory_writer
+
+    def cast_spell(self, spell_words: str) -> None:
+        """Método público para scripts lançarem magias."""
+        self._injector.cast_spell(spell_words)
 
     # ------------------------------------------------------------------
     # Resolucao de HWND (mantida para cast_spell / focus_client)
@@ -337,7 +346,7 @@ class BotEngine:
         except Exception as e:
             self._log.error(f"Erro ao atualizar estado: {e}", exc_info=True)
 
-    def _check_and_reconnect(self) -> bool:
+    def check_and_reconnect(self) -> bool:
         try:
             self._memory.read_int(MemoryAddress(0x63FE8C))
             self._connection_retry_count = 0
@@ -402,6 +411,15 @@ class BotEngine:
             if creature.id not in last_ids:
                 self.event_manager.emit(
                     EventType.CREATURE_DETECTED,
+                    creature=creature,
+                    player=self.player,
+                )
+
+        current_ids = {c.id for c in self.creatures}
+        for creature in self._last_creatures:
+            if creature.id > 0 and creature.id not in current_ids:
+                self.event_manager.emit(
+                    EventType.CREATURE_KILLED,
                     creature=creature,
                     player=self.player,
                 )

@@ -130,7 +130,9 @@ class ProfileManager:
                 scripts_data[yaml_key] = {"enabled": False}
                 continue
             entry = {"enabled": script.enabled}
-            entry.update(script.config)
+            for k, v in script.config.items():
+                if k != "enabled":
+                    entry[k] = v
             scripts_data[yaml_key] = entry
 
         data = {

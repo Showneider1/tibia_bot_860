@@ -123,9 +123,9 @@ class PlayerReader:
 
             # Atributos vitais
             addr_hp       = self._addresses.get("health",    self._addresses.get("hp"))
-            addr_hp_max   = self._addresses.get("health_max", self._addresses.get("max_hp", addr_hp))
+            addr_hp_max   = self._addresses.get("health_max", self._addresses.get("max_hp"))
             addr_mana     = self._addresses.get("mana",      self._addresses.get("mp"))
-            addr_mana_max = self._addresses.get("mana_max",  self._addresses.get("max_mana", addr_mana))
+            addr_mana_max = self._addresses.get("mana_max",  self._addresses.get("max_mana"))
 
             health     = self._memory.read_int(addr_hp)       if addr_hp       else 0
             health_max = self._memory.read_int(addr_hp_max)   if addr_hp_max   else 0
@@ -135,13 +135,25 @@ class PlayerReader:
             if health < 0 or health_max <= 0 or mana < 0 or mana_max <= 0:
                 return None
 
-            # Stats gerais
-            level       = self._memory.read_int(self._addresses.get("level",       addr_id))
-            experience  = self._memory.read_int(self._addresses.get("experience",  addr_id))
-            magic_level = self._memory.read_int(self._addresses.get("magic_level", addr_id))
-            soul        = self._memory.read_int(self._addresses.get("soul",        addr_id))
-            stamina     = self._memory.read_int(self._addresses.get("stamina",     addr_id))
-            capacity    = self._memory.read_int(self._addresses.get("capacity",    addr_id))
+            # Stats gerais — fallback None (nao usar addr_id como fallback)
+            addr_level   = self._addresses.get("level")
+            addr_exp     = self._addresses.get("experience")
+            addr_mlvl    = self._addresses.get("magic_level")
+            addr_soul    = self._addresses.get("soul")
+            addr_stamina = self._addresses.get("stamina")
+            addr_cap     = self._addresses.get("capacity")
+
+            level       = self._memory.read_int(addr_level)   if addr_level   else 0
+            experience  = self._memory.read_int(addr_exp)     if addr_exp     else 0
+            magic_level = self._memory.read_int(addr_mlvl)    if addr_mlvl    else 0
+            soul        = self._memory.read_int(addr_soul)    if addr_soul    else 0
+            stamina     = self._memory.read_int(addr_stamina) if addr_stamina else 0
+            # FIXME: capacity address overlaps with name buffer (addresses_860.py)
+            # Retorna 0 como fallback seguro ate endereco real ser calibrado via CE.
+            try:
+                capacity    = self._memory.read_int(addr_cap)     if addr_cap     else 0
+            except Exception:
+                capacity    = 0
 
             # Vocacao — lê 1 byte (read_int contamina com bytes adjacentes)
             vocation = "Unknown"

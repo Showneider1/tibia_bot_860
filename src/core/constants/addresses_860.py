@@ -24,8 +24,10 @@ PLAYER = {
     "mana_max":       PLAYER_BASE_EXP.with_offset(-24),     # 0x63FE74
     "soul":           PLAYER_BASE_EXP.with_offset(-28),     # 0x63FE70
     "stamina":        PLAYER_BASE_EXP.with_offset(-32),     # 0x63FE6C
-    "capacity":       PLAYER_BASE_EXP.with_offset(-36),     # 0x63FE68
-    "name":           PLAYER_BASE_EXP.with_offset(-50),     # 0x63FE5E
+    # FIXME: capacity (-36 = 0x63FE68) overlap com buffer de name (-50 = 0x63FE5A, 32 bytes)
+    # 0x63FE68 cai no byte 14 do nome. Requer CE para achar endereço real de capacity.
+    "capacity":       PLAYER_BASE_EXP.with_offset(-36),     # 0x63FE68 (PROVAVELMENTE ERRADO)
+    "name":           PLAYER_BASE_EXP.with_offset(-50),     # 0x63FE5A
     "flags":          PLAYER_BASE_EXP.with_offset(-108),    # 0x63FE20
     # Vocation: byte imediatamente após flags (flags+1)
     # Tibia 8.60: 1=Sorcerer,2=Druid,3=Paladin,4=Knight,5=MS,6=ED,7=RP,8=EK
@@ -141,15 +143,22 @@ PLAYER_EXTRA = {
     "go_to_x":               MemoryAddress(0x63FE8C + 72),  # Experience + 72 = 0x63FED4
     "go_to_y":               MemoryAddress(0x63FE8C + 76),  # Experience + 76 = 0x63FED8
     "go_to_z":               MemoryAddress(0x63FE8C + 80),  # Experience + 80 = 0x63FEDC
-    "red_square":            MemoryAddress(0x63FE64),       # Target ID
-    "green_square":          MemoryAddress(0x63FE60),       # Follow ID
-    "white_square":          MemoryAddress(0x63FE5C),       # AutoRoute ID
-    "target_id":             MemoryAddress(0x63FE64),       # Same as red_square
-    "target_battlelist_id":  MemoryAddress(0x63FE5C),       # TargetId - 8
-    "target_type":           MemoryAddress(0x63FE67),       # TargetId + 3
     "player_z":              MemoryAddress(0x64F600),
-    "attack_count":          MemoryAddress(0x63DA40),
-    "follow_count":          MemoryAddress(0x63DA60),       # AttackCount + 0x20
+    "attack_count":          MemoryAddress(0x63DA40),       # Attack counter (incrementa a cada ataque)
+    "follow_count":          MemoryAddress(0x63DA60),       # Follow counter (AttackCount + 0x20)
+}
+
+# Targeting via memory injection (ElfBot-style / TibiaAPI)
+# Baseados no TibiaAPI 8.60: Player.TargetId = Player.RedSquare = 0x63FE64
+# Writing to these addresses selects a target and triggers auto-attack,
+# no PostMessage/input injection needed.
+TARGET = {
+    "target_id":             MemoryAddress(0x63FE64),  # Player.TargetId (creature ID)
+    "target_mode":           MemoryAddress(0x63FE67),  # Player.TargetType: 0=none, 1=attack, 2=follow
+    "target_battlelist_id":   MemoryAddress(0x63FE5C),  # Player.TargetBattlelistId (slot+1, 0=none)
+    "target_battlelist_type": MemoryAddress(0x63FE5F),  # Player.TargetBattlelistType: 0=none, 1=attack, 2=follow
+    "attack_count":          MemoryAddress(0x63DA40),  # Player.AttackCount (auto-increment)
+    "follow_count":          MemoryAddress(0x63DA60),  # Player.FollowCount (auto-increment)
 }
 
 # VIP List (para detecção de players)

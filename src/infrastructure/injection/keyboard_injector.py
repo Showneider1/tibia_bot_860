@@ -260,26 +260,15 @@ class KeyboardInjector(ICommandInjector):
         except Exception:
             return False
 
-    def send_key_background(self, vk_code: int) -> None:
+    def send_key_background(self, vk_code: int) -> bool:
         """
         Envia KEYDOWN + KEYUP via PostMessage para o HWND alvo.
 
-        PostMessage(WM_KEYDOWN/KEYUP, vk, lParam) injeta na fila de mensagens
-        da janela do Tibia. Funciona em background (sem foreground).
-        Movement keys (Numpad) sao processadas mesmo com chat aberto.
-
-        lParam bits:
-          0-15:  repeat count (1)
-          16-23: scancode
-          24:    extended key flag (setas)
-          30:    previous key state (0=up, 1=down)
-          31:    transition state (0=press, 1=release)
-
-        sleep(35ms) pos-envio: garante processamento antes do proximo tick.
+        Returns True se enviado, False se HWND invalido.
         """
         if not self._hwnd and not self._find_window():
             self._log.error("HWND nao encontrado para PostMessage")
-            return
+            return False
 
         scancode = win32api.MapVirtualKey(vk_code, 0) & 0xFF
 
@@ -297,23 +286,107 @@ class KeyboardInjector(ICommandInjector):
             time.sleep(0.035)
             win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP, vk_code, lparam_up)
             self._log.debug(f"PostMessage OK vk=0x{vk_code:02X}")
+            return True
         except Exception as e:
             self._log.error(f"PostMessage falhou vk=0x{vk_code:02X}: {e}")
+            return False
 
     def _send_text_background(self, text: str) -> None:
-        """Digita texto caractere a caractere (magias/chat)."""
+        """Digita texto usando WM_CHAR (PostMessage nao passa por TranslateMessage)."""
+        if not self._hwnd and not self._find_window():
+            return
         for ch in text:
-            vk = win32api.VkKeyScan(ch) & 0xFF
-            self.send_key_background(vk)
+            win32gui.PostMessage(self._hwnd, win32con.WM_CHAR, ord(ch), 1)
             time.sleep(0.01)
+        vk_enter = win32con.VK_RETURN
+        sc = win32api.MapVirtualKey(vk_enter, 0) & 0xFF
+        lparam_down = 1 | (sc << 16)
+        lparam_up   = 1 | (sc << 16) | (1 << 30) | (1 << 31)
+        win32gui.PostMessage(self._hwnd, win32con.WM_KEYDOWN, vk_enter, lparam_down)
+        time.sleep(0.035)
+        win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP,   vk_enter, lparam_up)
+
+    def send_mouse_click(self, client_x: int, client_y: int) -> bool:
+        """Envia clique do mouse via PostMessage (assincrono) — mesmo mecanismo do F1 que funciona.
+
+        Returns True se o clique foi enviado, False se HWND invalido.
+        """
+        if not self._hwnd and not self._find_window():
+            self._log.error("HWND nao encontrado para mouse click")
+            return False
+        lparam = (client_y << 16) | (client_x & 0xFFFF)
+        try:
+            win32gui.PostMessage(self._hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
+            time.sleep(0.005)
+            win32gui.PostMessage(self._hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+            time.sleep(0.015)
+            win32gui.PostMessage(self._hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+            self._log.debug(f"Mouse click PostMessage ({client_x}, {client_y})")
+            return True
+        except Exception as e:
+            self._log.error(f"Mouse click falhou ({client_x},{client_y}): {e}")
+            return False
+
+    def get_client_size(self) -> tuple:
+        """Retorna (width, height) da area cliente do HWND via GetClientRect."""
+        if not self._hwnd and not self._find_window():
+            return (480, 360)
+        try:
+            left, top, right, bottom = win32gui.GetClientRect(self._hwnd)
+            return (right - left, bottom - top)
+        except Exception:
+            return (480, 360)
+
+    @staticmethod
+    def tile_to_screen(
+        tile_x: int, tile_y: int,
+        player_x: int, player_y: int,
+        client_width: int = 480, client_height: int = 360,
+        offset_x: int = 0, offset_y: int = 0
+    ) -> tuple:
+        """Converte coordenadas de tile (isometrico) para pixels na janela do Tibia.
+
+        Formula isometrica padrao Tibia 8.60:
+          screen_x = centro_x + (dx - dy) * 16
+          screen_y = centro_y + (dx + dy) * 8
+
+        offset_x/y desloca o centro do viewport (ex: -100 para mover click pra esquerda
+        se a janela do jogo nao ocupar todo o client area).
+        """
+        dx = tile_x - player_x
+        dy = tile_y - player_y
+        center_x = (client_width // 2) + offset_x
+        center_y = (client_height // 2) + offset_y
+        sx = center_x + (dx - dy) * 16
+        sy = center_y + (dx + dy) * 8
+        return (sx, sy)
+
+    def click_tile(self, tile_x: int, tile_y: int, player_x: int, player_y: int,
+                   offset_x: int = 0, offset_y: int = 0) -> bool:
+        """Converte tile (x,y) para pixel e clica na tela do Tibia. Returns True se clicou."""
+        w, h = self.get_client_size()
+        sx, sy = self.tile_to_screen(tile_x, tile_y, player_x, player_y, w, h, offset_x, offset_y)
+        self._log.info(f"click_tile: tile({tile_x},{tile_y}) player({player_x},{player_y}) "
+                       f"client({w}x{h}) offset({offset_x},{offset_y}) -> screen({sx},{sy})")
+        return self.send_mouse_click(sx, sy)
+
+    def say(self, text: str) -> None:
+        """Abre o chat, digita a mensagem e envia."""
         self.send_key_background(win32con.VK_RETURN)
+        time.sleep(0.05)
+        self._send_text_background(text)
 
     def cast_spell(self, spell_words: str) -> None:
         self._log.debug(f"Casting spell: {spell_words}")
+        if spell_words.upper() in {"F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"}:
+            self.send_hotkey(spell_words)
+            return
+        self.send_key_background(win32con.VK_RETURN)
+        time.sleep(0.050)
         self._send_text_background(spell_words)
 
-    def send_hotkey(self, key: str) -> None:
-        """Envia F1-F12 em background."""
+    def send_hotkey(self, key: str) -> bool:
+        """Envia F1-F12 em background. Returns True se enviado."""
         mapping = {
             "F1":  win32con.VK_F1,  "F2":  win32con.VK_F2,  "F3":  win32con.VK_F3,
             "F4":  win32con.VK_F4,  "F5":  win32con.VK_F5,  "F6":  win32con.VK_F6,
@@ -323,5 +396,5 @@ class KeyboardInjector(ICommandInjector):
         vk = mapping.get(key.upper())
         if not vk:
             self._log.warning(f"Hotkey nao suportada: {key}")
-            return
-        self.send_key_background(vk)
+            return False
+        return self.send_key_background(vk)

@@ -60,6 +60,7 @@ class LooterScript(BaseScript):
         self._looted_positions: Set[tuple] = set()
         self._kill_positions: List[Dict] = []  # [{position, timestamp, creature_name}]
         self._last_loot_time = 0
+        self._known_creatures: Dict[int, Creature] = {}
 
     def execute(self, context: Dict[str, Any]) -> bool:
         player: Player = context.get("player")
@@ -100,11 +101,22 @@ class LooterScript(BaseScript):
         return False
 
     def _update_kill_tracking(self, creatures: List[Creature], current_time: float) -> None:
-        """Rastreia criaturas que morreram baseado na HP bar."""
-        # Esta é uma implementação simplificada. Em uma versão mais avançada,
-        # poderíamos rastrear criaturas que tinham HP e agora não existem mais.
-        # Por enquanto, apenas logamos que o sistema está ativo.
-        pass
+        """Rastreia criaturas que sumiram da BattleList (potencialmente mortas)."""
+        current: Dict[int, Creature] = {c.id: c for c in creatures if c.id > 0}
+        if not self._known_creatures:
+            self._known_creatures = dict(current)
+            return
+        for cid, creature in self._known_creatures.items():
+            if cid not in current and creature.position is not None:
+                self._kill_positions.append({
+                    "x": creature.position.x,
+                    "y": creature.position.y,
+                    "z": creature.position.z,
+                    "timestamp": current_time,
+                    "creature_name": creature.name,
+                })
+                self._log.debug(f"Kill detectada: {creature.name} em ({creature.position.x}, {creature.position.y})")
+        self._known_creatures = dict(current)
 
     def register_kill(self, creature: Creature) -> None:
         """Registra uma kill para loot tracking."""
@@ -150,17 +162,28 @@ class LooterScript(BaseScript):
     def _loot_position(self, player: Player, target: Dict, bot_engine) -> bool:
         """Executa loot em uma position específica."""
         try:
+            inj = bot_engine.injector
+            px, py = player.position.x, player.position.y
+            tx, ty = target["x"], target["y"]
+
+            # Passo 1: clica no tile do corpse (isometrico -> tela)
+            sx, sy = inj.tile_to_screen(tx, ty, px, py)
+            self._log.info(f"Clique no tile ({tx},{ty}) -> tela ({sx},{sy})")
+            inj.send_mouse_click(sx, sy)
+            time.sleep(0.15)
+
+            # Passo 2: se usar hotkey, envia depois do clique
             if self.config["use_hotkey_loot"]:
-                # Usa hotkey configurada no Tibia (F4 ou similar)
-                # O Tibia tem auto-loot quando você clica em um item com a hotkey certa
-                bot_engine._injector.send_hotkey(self.config["loot_hotkey"])
-                self._log.info(f"💰 Loot usando hotkey em ({target['x']}, {target['y']})")
+                inj.send_hotkey(self.config["loot_hotkey"])
+                self._log.info(f"Loot hotkey em ({tx},{ty})")
                 return True
-            elif self.config["open_corpses"]:
-                # Tenta abrir corpse com hotkey
-                bot_engine._injector.send_hotkey(self.config["open_corpse_hotkey"])
-                self._log.info(f"📦 Abrindo corpse em ({target['x']}, {target['y']})")
+
+            # Passo 3: se nao, tenta abrir corpse com hotkey dedicada
+            if self.config["open_corpses"]:
+                inj.send_hotkey(self.config["open_corpse_hotkey"])
+                self._log.info(f"Abrindo corpse em ({tx},{ty})")
                 return True
+
             return False
         except Exception as e:
             self._log.error(f"Erro ao loot em ({target['x']}, {target['y']}): {e}")

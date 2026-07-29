@@ -172,7 +172,8 @@ class HealingScript(BaseScript):
         self, hp_pct: float, mana_pct: float
     ) -> Optional[str]:
         """Seleciona heal baseado apenas na porcentagem de HP."""
-        if self.config["enable_overheat_protection"] and hp_pct >= 95:
+        threshold = int(self.config["overheat_threshold"] * 100)
+        if self.config["enable_overheat_protection"] and hp_pct >= threshold:
             return None
 
         if hp_pct < self.config["hp_ultimate"]:
@@ -200,19 +201,10 @@ class HealingScript(BaseScript):
 
     def _execute_heal(self, player: Player, bot_engine, heal_type: str) -> bool:
         """
-        Executa o heal selecionado.
-        FIX: chama bot_engine.cast_spell() em vez de bot_engine._injector.cast_spell()
-        para nao violar encapsulamento.
+        Executa o heal selecionado via bot_engine.cast_spell() (método público).
         """
         try:
-            # Tenta metodo publico primeiro; cai para _injector como fallback
-            if hasattr(bot_engine, "cast_spell"):
-                bot_engine.cast_spell(heal_type)
-            elif hasattr(bot_engine, "_injector"):
-                bot_engine._injector.cast_spell(heal_type)
-            else:
-                self._log.error("bot_engine nao possui metodo cast_spell nem _injector")
-                return False
+            bot_engine.cast_spell(heal_type)
             return True
         except Exception as e:
             self._log.error(f"Erro ao casting {heal_type}: {e}")

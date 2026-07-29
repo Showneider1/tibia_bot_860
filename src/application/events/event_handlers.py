@@ -10,28 +10,34 @@ class EventHandlers:
         self._log = get_logger("EventHandlers")
 
     def on_health_low(self, **kwargs) -> None:
-        """Handler para HP baixo."""
-        hp = kwargs.get("hp", 0)
-        hp_max = kwargs.get("hp_max", 1)
+        player = kwargs.get("player")
+        if player is None:
+            return
+        hp = player.stats.health
+        hp_max = player.stats.max_health
         hp_pct = (hp / hp_max) * 100 if hp_max > 0 else 0
-        self._log.warning(f"⚠️ HP BAIXO: {hp}/{hp_max} ({hp_pct:.1f}%)")
+        self._log.warning(f"HP BAIXO: {hp}/{hp_max} ({hp_pct:.1f}%)")
 
     def on_mana_low(self, **kwargs) -> None:
-        """Handler para mana baixa."""
-        mana = kwargs.get("mana", 0)
-        mana_pct = kwargs.get("mana_pct", 0)
-        self._log.warning(f"⚠️ MANA BAIXA: {mana} ({mana_pct:.1f}%)")
+        player = kwargs.get("player")
+        if player is None:
+            return
+        mana = player.stats.mana
+        mana_max = player.stats.max_mana
+        mana_pct = (mana / mana_max) * 100 if mana_max > 0 else 0
+        self._log.warning(f"MANA BAIXA: {mana}/{mana_max} ({mana_pct:.1f}%)")
 
     def on_creature_detected(self, **kwargs) -> None:
-        """Handler para criatura detectada."""
-        creature_name = kwargs.get("creature_name", "Unknown")
-        self._log.info(f"👹 Criatura detectada: {creature_name}")
+        creature = kwargs.get("creature")
+        if creature is None:
+            return
+        self._log.info(f"Criatura detectada: {creature.name}")
 
     def on_level_up(self, **kwargs) -> None:
-        """Handler para level up."""
-        new_level = kwargs.get("level", 0)
-        self._log.info(f"🎉 LEVEL UP! Novo level: {new_level}")
+        player = kwargs.get("player")
+        if player is None:
+            return
+        self._log.info(f"LEVEL UP! Novo level: {player.level}")
 
     def on_connection_lost(self, **kwargs) -> None:
-        """Handler para perda de conexão."""
-        self._log.error("❌ CONEXÃO PERDIDA COM O CLIENTE!")
+        self._log.error("CONEXAO PERDIDA COM O CLIENTE!")

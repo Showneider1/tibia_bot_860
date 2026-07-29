@@ -151,8 +151,7 @@ class BuffScript(BaseScript):
                 if self._cast_buff(buff, bot_engine, current_time):
                     any_buff_cast = True
                     self._log.info(f"⚡ Buff ativado: {buff.name} ({buff.spell})")
-                    # Pequeno delay entre buffs para evitar spam
-                    time.sleep(0.3)
+                    # Apenas um buff por tick; os demais castam no proximo ciclo
         
         return any_buff_cast
 
@@ -201,7 +200,7 @@ class BuffScript(BaseScript):
     def _cast_buff(self, buff: Buff, bot_engine, current_time: float) -> bool:
         """Lança o buff."""
         try:
-            bot_engine._injector.cast_spell(buff.spell)
+            bot_engine.cast_spell(buff.spell)
             buff.last_cast = current_time
             self._active_buffs[buff.name] = buff
             return True

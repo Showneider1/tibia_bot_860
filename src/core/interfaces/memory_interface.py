@@ -10,15 +10,19 @@ class IMemoryReader(ABC):
         ...
 
     @abstractmethod
-    def read_int64(self, address: MemoryAddress) -> int:
+    def read_int64(self, address: MemoryAddress, use_cache: bool = True) -> int:
         ...
 
     @abstractmethod
-    def read_string(self, address: MemoryAddress, length: int = 32) -> str:
+    def read_string(
+        self, address: MemoryAddress, max_length: int = 256, use_cache: bool = True
+    ) -> str:
         ...
 
     @abstractmethod
-    def read_bytes(self, address: MemoryAddress, length: int) -> bytes:
+    def read_bytes(
+        self, address: MemoryAddress, size: int, use_cache: bool = True
+    ) -> bytes:
         ...
 
 

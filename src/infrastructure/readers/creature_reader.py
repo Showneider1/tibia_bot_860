@@ -72,6 +72,7 @@ class CreatureReader:
                             ),
                             visible=True,
                             walking=False,
+                            battle_slot=slot_index,
                         )
                     )
 

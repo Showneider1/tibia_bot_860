@@ -16,6 +16,7 @@ from src.application.scripts.buff_script import BuffScript
 from src.application.scripts.aimbot_script import AimbotScript
 from src.application.scripts.cavebot_script import CavebotScript
 from src.application.scripts.looter_script import LooterScript
+from src.application.scripts.persistent_script import PersistentScript
 
 __all__ = [
     "BaseScript",
@@ -25,4 +26,5 @@ __all__ = [
     "AimbotScript",
     "CavebotScript",
     "LooterScript",
+    "PersistentScript",
 ]
