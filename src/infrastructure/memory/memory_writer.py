@@ -30,6 +30,7 @@ class MemoryWriter(IMemoryWriter):
         return self._pm.process_handle
 
     def write_int(self, address: MemoryAddress, value: int) -> bool:
+        """Escreve inteiro de 32 bits com sinal (signed)."""
         data = int(value).to_bytes(4, "little", signed=True)
         bytes_written = ctypes.c_size_t(0)
         ok = kernel32.WriteProcessMemory(
@@ -37,7 +38,22 @@ class MemoryWriter(IMemoryWriter):
         )
         return bool(ok and bytes_written.value == len(data))
 
+    def write_uint(self, address: MemoryAddress, value: int) -> bool:
+        """Escreve inteiro de 32 bits sem sinal (unsigned).
+
+        Use este método para escrever IDs de criaturas, slots de battle list
+        e qualquer valor que o Tibia armazena como DWORD/uint32. Evita
+        OverflowError silencioso para IDs > 0x7FFFFFFF que ocorre com write_int.
+        """
+        data = int(value).to_bytes(4, "little", signed=False)
+        bytes_written = ctypes.c_size_t(0)
+        ok = kernel32.WriteProcessMemory(
+            self._handle, ctypes.c_uint32(address.value), data, len(data), ctypes.byref(bytes_written)
+        )
+        return bool(ok and bytes_written.value == len(data))
+
     def write_bytes(self, address: MemoryAddress, data: bytes) -> bool:
+        """Escreve bytes arbitrários."""
         size = len(data)
         c_data = ctypes.create_string_buffer(data, size)
         bytes_written = ctypes.c_size_t(0)
