@@ -5,7 +5,7 @@ import time
 import sys
 import ctypes
 import logging
-import os  # [NOVO] Importado para operações de sistema de arquivos
+import os
 
 from src.infrastructure.memory.process_manager import ProcessManager
 from src.infrastructure.memory.memory_reader import MemoryReader
@@ -13,6 +13,7 @@ from src.infrastructure.injection.keyboard_injector import KeyboardInjector
 from src.infrastructure.logging.logger import get_logger
 
 from src.application.bot_engine import BotEngine, EventType
+from src.application.scripts.aimbot_script import AimbotScript
 
 # Importa endereços oficiais da TibiaAPI
 from src.core.constants.addresses_860 import (
@@ -35,6 +36,7 @@ class BotApplication:
     def __init__(self):
         self._log = get_logger("BotApplication")
         self.bot_engine: BotEngine | None = None
+        self.aimbot: AimbotScript | None = None
 
     def initialize(self) -> bool:
         """Inicializa todos os componentes do bot."""
@@ -63,6 +65,14 @@ class BotApplication:
                 battle_list_addresses=BATTLE_LIST,
                 creature_offsets=CREATURE,
             )
+
+            # BUG #6 FIX: Instancia e registra o AimbotScript no ScriptEngine.
+            # Antes este passo não existia: o ScriptEngine rodava com 0 scripts
+            # e _run_scripts() nunca executava nada.
+            self.aimbot = AimbotScript()
+            self.aimbot.enabled = True  # garante habilitado independente do default
+            self.bot_engine.script_engine.register(self.aimbot)
+            self._log.info("[AimbotScript] registrado e habilitado no ScriptEngine.")
 
             # Registra handlers de eventos
             self._setup_event_handlers()
@@ -141,7 +151,7 @@ class BotApplication:
         """Loop com interação por comandos."""
         self._log.info("\n" + "=" * 60)
         self._log.info("🚀 Bot em modo interativo.")
-        self._log.info("Comandos: 'start', 'stop', 'status', 'exit'")
+        self._log.info("Comandos: 'start', 'stop', 'status', 'aimbot on', 'aimbot off', 'exit'")
         self._log.info("=" * 60 + "\n")
 
         try:
@@ -156,6 +166,16 @@ class BotApplication:
                     self.bot_engine.enabled = False
                     self._log.info("✓ Bot desabilitado.")
 
+                elif cmd == "aimbot on":
+                    if self.aimbot:
+                        self.aimbot.enabled = True
+                        self._log.info("✓ AimbotScript habilitado.")
+
+                elif cmd == "aimbot off":
+                    if self.aimbot:
+                        self.aimbot.enabled = False
+                        self._log.info("✓ AimbotScript desabilitado.")
+
                 elif cmd == "status":
                     player_info = (
                         f"ID={self.bot_engine.player.id}, "
@@ -165,15 +185,21 @@ class BotApplication:
                         else "Player não carregado"
                     )
                     creature_count = len(self.bot_engine.creatures)
+                    scripts = self.bot_engine.script_engine.list_scripts()
                     self._log.info(f"Player: {player_info}")
-                    self._log.info(f"Criaturas: {creature_count}")
-                    self._log.info(f"Scripts registrados: {len(self.bot_engine.script_engine.list_scripts())}")
+                    self._log.info(f"Criaturas na battle list: {creature_count}")
+                    self._log.info(f"Scripts registrados: {len(scripts)}")
+                    for s in scripts:
+                        self._log.info(f"  - {s['name']} | enabled={s['enabled']} | priority={s['priority']}")
+                    if self.aimbot and self.aimbot._current_target:
+                        t = self.aimbot._current_target
+                        self._log.info(f"Target atual: {t.name} (ID={t.id}, HP={t.stats.health}%)")
 
                 elif cmd == "exit":
                     break
 
                 else:
-                    self._log.info("❓ Comando inválido.")
+                    self._log.info("❓ Comandos: start | stop | aimbot on | aimbot off | status | exit")
 
                 # Faz um tick do bot
                 self.bot_engine.tick()
@@ -187,28 +213,24 @@ class BotApplication:
 
 def main():
     """Entry point."""
-    
-    # [NOVO] Configuração global do Logging 
-    import os
-    # Garante que o diretório de logs existe
     os.makedirs("logs", exist_ok=True)
-    
+
     logging.basicConfig(
-        level=logging.DEBUG,  # Alterado para DEBUG para capturar todas as mensagens de depuração
+        level=logging.DEBUG,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         handlers=[
             logging.FileHandler("logs/bot.log", encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)  # Mantém também o output no console
+            logging.StreamHandler(sys.stdout)
         ]
     )
-    
+
     app = BotApplication()
 
     if not app.initialize():
         sys.exit(1)
 
-    # Escolha modo: automático ou interativo
-    # app.run()  # Modo automático
+    # Escolha modo: automatico ou interativo
+    # app.run()  # Modo automatico
     app.run_interactive()  # Modo interativo (recomendado para debug)
 
 
