@@ -15,8 +15,11 @@ class AimbotScript(BaseScript):
     def __init__(self):
         super().__init__("AimBot")
         self.priority = 50
+        # BUG #1 FIX: enabled=True para que o ScriptEngine execute este script.
+        # Antes estava False, impedindo qualquer ataque.
+        self.enabled = True
         self.config = {
-            "enabled": False,
+            "enabled": True,
             "max_distance": 7,
             "attack_hotkey": "F1",
             "min_hp_to_attack": 30,
@@ -190,7 +193,15 @@ class AimbotScript(BaseScript):
                 if creature.name not in self.config["target_whitelist"]:
                     continue
 
-            if creature.stats.health <= 0:
+            # BUG #4 FIX: hp_bar=0 pode ser temporário (cliente ainda não atualizou).
+            # Antes descartava a criatura imediatamente. Agora só descarta se
+            # health for estritamente negativo, o que nunca ocorre por Stats.health
+            # ser clampado em 0, então usamos a condição mais segura: só filtra
+            # se hp_bar == 0 E o nome já é conhecido (slot consolidado).
+            if creature.stats.health < 0:
+                continue
+            if creature.stats.health == 0 and creature.name != "Unknown":
+                # Criatura com nome conhecido e hp=0: provavelmente morta, descarta.
                 continue
 
             pri = self._priority_for_creature(creature.name) if has_priorities else None
@@ -276,13 +287,18 @@ class AimbotScript(BaseScript):
         return self.config["attack_hotkey"]
 
     def _target_via_memory(self, creature: Creature, bot_engine) -> bool:
+        """Injeta o ID da criatura diretamente na memória (ElfBot-style).
+
+        BUG #3 FIX: usa write_uint (unsigned 32-bit) em vez de write_int
+        (signed). IDs de criaturas são DWORD/uint32; valores > 0x7FFFFFFF
+        causavam OverflowError silencioso com write_int.
+        """
         try:
             mw: MemoryWriter = bot_engine.memory_writer
             mr: MemoryReader = bot_engine.memory_reader
-            ok1 = mw.write_int(TARGET["target_id"], creature.id)
+            ok1 = mw.write_uint(TARGET["target_id"], creature.id)
             ok2 = mw.write_bytes(TARGET["target_mode"], b'\x01')
             if ok1 and ok2:
-                # Verify: read back the target ID (force fresh read, no cache)
                 read_id = mr.read_uint(TARGET["target_id"], use_cache=False)
                 if read_id == creature.id:
                     self._log.debug(f"Memory target OK: {creature.name} (ID={creature.id})")
@@ -297,13 +313,17 @@ class AimbotScript(BaseScript):
             return False
 
     def _target_via_battle_list_memory(self, creature: Creature, bot_engine) -> bool:
+        """Injeta o slot da battle list via memória.
+
+        BUG #3 FIX: usa write_uint para o slot (unsigned 32-bit).
+        """
         slot = creature.battle_slot
         if slot < 0:
             return False
         try:
             mw: MemoryWriter = bot_engine.memory_writer
             mr: MemoryReader = bot_engine.memory_reader
-            ok1 = mw.write_int(TARGET["target_battlelist_id"], slot + 1)
+            ok1 = mw.write_uint(TARGET["target_battlelist_id"], slot + 1)
             ok2 = mw.write_bytes(TARGET["target_battlelist_type"], b'\x01')
             if ok1 and ok2:
                 read_slot = mr.read_uint(TARGET["target_battlelist_id"], use_cache=False)
