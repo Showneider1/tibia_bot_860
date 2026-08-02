@@ -29,11 +29,11 @@ class AimbotScript(BaseScript):
             "targeting_mode": "highest_xp",
             "prefer_low_hp_for_kill": True,
             "low_hp_threshold": 25,
+            # BUG A FIX: lista vazia — combo so dispara se o usuario configurar
+            # explicitamente. Valores hardcoded (exori gran / exori hur) causavam
+            # o bot disparar magias nao configuradas em qualquer personagem.
             "enable_combo_attacks": True,
-            "combo_spells": [
-                {"spell": "exori gran", "cooldown": 4.0, "mana_cost": 120, "max_distance": 1},
-                {"spell": "exori hur",  "cooldown": 6.0, "mana_cost": 40,  "max_distance": 3},
-            ],
+            "combo_spells": [],
             "xp_values": {
                 "Dragon": 700,
                 "Dragon Lord": 1100,
@@ -173,6 +173,10 @@ class AimbotScript(BaseScript):
         if distance > spell_range:
             return False
 
+        # BUG C FIX: quando ainda no cooldown principal, tenta combo (comportamento
+        # correto — aproveita o tempo ocioso entre ataques). Mas quando o ataque
+        # principal executa, NAO chama combo no mesmo tick; o combo sera disparado
+        # no proximo tick dentro do bloco de cooldown acima.
         if time.time() - self._last_attack_time < self.config["cooldown"]:
             if self.config["enable_combo_attacks"] and self._current_target:
                 return self._try_combo_attack(player, self._current_target, bot_engine)
@@ -186,13 +190,10 @@ class AimbotScript(BaseScript):
             self._last_attack_time = time.time()
             hp_pct = (target.stats.health / target.stats.max_health * 100) if target.stats.max_health > 0 else 0
             self._log.info(f"Atacando: {target.name} (HP: {hp_pct:.0f}%)")
-
-            if self.config["enable_combo_attacks"]:
-                self._try_combo_attack(player, target, bot_engine)
-
-            return True
-
-        return False
+            # BUG C FIX: removida chamada imediata ao combo apos ataque principal.
+            # O combo sera tentado no proximo tick (bloco cooldown acima),
+            # evitando dois spells no mesmo tick.
+        return success
 
     def _filter_creatures(self, creatures: List[Creature], player: Player) -> List[Creature]:
         filtered = []
@@ -210,6 +211,12 @@ class AimbotScript(BaseScript):
             if creature.stats.health < 0:
                 continue
             if creature.stats.health == 0 and creature.name != "Unknown":
+                continue
+
+            # BUG B FIX: descarta criaturas em andar diferente do player.
+            # distance_chebyshev usa apenas X/Y, entao sem esse guard um monstro
+            # no andar de baixo/cima passa pelo filtro de distancia e e atacado.
+            if creature.position.z != player.position.z:
                 continue
 
             pri = self._priority_for_creature(creature.name) if has_priorities else None
@@ -445,6 +452,15 @@ class AimbotScript(BaseScript):
 
         combo_spells = self.config.get("combo_spells", [])
         if not combo_spells:
+            return False
+
+        # BUG B FIX (guard extra): garante que o alvo ainda esta no mesmo andar
+        # antes de tentar o combo, mesmo que _filter_creatures ja tenha filtrado.
+        if target.position.z != player.position.z:
+            self._log.debug(
+                f"Combo ignorado: {target.name} em z={target.position.z}, "
+                f"player em z={player.position.z}"
+            )
             return False
 
         current_time = time.time()
