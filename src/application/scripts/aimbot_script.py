@@ -29,9 +29,7 @@ class AimbotScript(BaseScript):
             "targeting_mode": "highest_xp",
             "prefer_low_hp_for_kill": True,
             "low_hp_threshold": 25,
-            # BUG A FIX: lista vazia — combo so dispara se o usuario configurar
-            # explicitamente. Valores hardcoded (exori gran / exori hur) causavam
-            # o bot disparar magias nao configuradas em qualquer personagem.
+            # combo_spells vazio por padrao — so dispara se o usuario configurar
             "enable_combo_attacks": True,
             "combo_spells": [],
             "xp_values": {
@@ -173,10 +171,7 @@ class AimbotScript(BaseScript):
         if distance > spell_range:
             return False
 
-        # BUG C FIX: quando ainda no cooldown principal, tenta combo (comportamento
-        # correto — aproveita o tempo ocioso entre ataques). Mas quando o ataque
-        # principal executa, NAO chama combo no mesmo tick; o combo sera disparado
-        # no proximo tick dentro do bloco de cooldown acima.
+        # Quando ainda no cooldown do ataque principal, tenta combo
         if time.time() - self._last_attack_time < self.config["cooldown"]:
             if self.config["enable_combo_attacks"] and self._current_target:
                 return self._try_combo_attack(player, self._current_target, bot_engine)
@@ -190,9 +185,6 @@ class AimbotScript(BaseScript):
             self._last_attack_time = time.time()
             hp_pct = (target.stats.health / target.stats.max_health * 100) if target.stats.max_health > 0 else 0
             self._log.info(f"Atacando: {target.name} (HP: {hp_pct:.0f}%)")
-            # BUG C FIX: removida chamada imediata ao combo apos ataque principal.
-            # O combo sera tentado no proximo tick (bloco cooldown acima),
-            # evitando dois spells no mesmo tick.
         return success
 
     def _filter_creatures(self, creatures: List[Creature], player: Player) -> List[Creature]:
@@ -213,9 +205,7 @@ class AimbotScript(BaseScript):
             if creature.stats.health == 0 and creature.name != "Unknown":
                 continue
 
-            # BUG B FIX: descarta criaturas em andar diferente do player.
-            # distance_chebyshev usa apenas X/Y, entao sem esse guard um monstro
-            # no andar de baixo/cima passa pelo filtro de distancia e e atacado.
+            # Descarta criaturas em andar diferente — distance_chebyshev ignora Z
             if creature.position.z != player.position.z:
                 continue
 
@@ -301,23 +291,33 @@ class AimbotScript(BaseScript):
             return distance_score + hp_score
         return max(creatures, key=threat_score)
 
-    def _get_attack_hotkey(self, target: Creature) -> str:
+    def _get_attack_hotkey(self, target: Creature) -> Optional[str]:
         pri = self._priority_for_creature(target.name)
         spell_or_key = pri.get("spell") if pri else None
         if spell_or_key and spell_or_key.upper() in _HOTKEYS:
             return spell_or_key
-        return self.config["attack_hotkey"]
+        hotkey = self.config.get("attack_hotkey")
+        if hotkey and hotkey.upper() in _HOTKEYS:
+            return hotkey
+        return None
 
     def _target_via_memory(self, creature: Creature, bot_engine) -> bool:
         """
-        Injeta o ID da criatura via escrita atomica de um unico DWORD.
+        Seleciona o alvo e dispara o ataque via memory injection.
 
-        Layout real do Tibia 8.60 em TARGET["target_id"] (0x63FE64):
-          bytes 0-2 (bits  0-23): creature ID (24 bits)
-          byte  3   (bits 24-31): target type/mode (0x01 = attack)
+        Como o ElfBot/TibiaAPI fazem:
+          1. Escreve o creature ID em TARGET[target_id] (0x63FE64) com
+             type=0x01 (attack) no byte alto — DWORD atomico.
+          2. Le attack_count (0x63DA40), incrementa em 1 e escreve de volta.
 
-        TARGET["target_mode"] (0x63FE67) e o mesmo DWORD deslocado 3 bytes,
-        entao escrever separado corrompe o ID. Empacotamos tudo em uint32.
+        O cliente Tibia 8.60 tem um loop interno que, a cada frame, compara
+        o attack_count atual com o ultimo valor processado. Se diferente,
+        le TARGET[target_id], monta e envia o pacote 0xA1 (Attack) ao
+        servidor. Sem o incremento, o servidor nunca recebe o comando e
+        o red square nao aparece.
+
+        PostMessage de hotkey NAO e necessario para iniciar o targeting —
+        apenas para spells/combos depois que o alvo ja esta selecionado.
         """
         try:
             mw: MemoryWriter = bot_engine.memory_writer
@@ -335,23 +335,31 @@ class AimbotScript(BaseScript):
                 )
                 return False
 
+            # Verify write
             read_back = mr.read_uint(TARGET["target_id"], use_cache=False)
             read_id   = read_back & 0x00FFFFFF
             read_type = (read_back >> 24) & 0xFF
 
-            if read_id == expected_id and read_type == target_type:
-                self._log.debug(
-                    f"Memory target OK: {creature.name} "
-                    f"ID=0x{read_id:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            if read_id != expected_id or read_type != target_type:
+                self._log.warning(
+                    f"Memory verify falhou: escreveu DWORD=0x{packed_target:08X}; "
+                    f"leu DWORD=0x{read_back:08X}"
                 )
-                return True
+                return False
 
-            self._log.warning(
-                f"Memory verify falhou: escreveu ID=0x{expected_id:06X} "
-                f"type=0x{target_type:02X} DWORD=0x{packed_target:08X}; "
-                f"leu ID=0x{read_id:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            self._log.debug(
+                f"Memory target OK: {creature.name} "
+                f"ID=0x{read_id:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
             )
-            return False
+
+            # ATTACK_COUNT FIX: incrementa o contador para acionar o envio
+            # do pacote 0xA1 (Attack) pelo proprio cliente Tibia.
+            # Sem este passo, o servidor nunca recebe o comando de ataque.
+            current_count = mr.read_uint(TARGET["attack_count"], use_cache=False)
+            mw.write_uint(TARGET["attack_count"], (current_count + 1) & 0xFFFFFFFF)
+            self._log.debug(f"attack_count: {current_count} -> {(current_count + 1) & 0xFFFFFFFF}")
+
+            return True
 
         except Exception as e:
             self._log.warning(f"Memory target exception: {e}")
@@ -359,13 +367,8 @@ class AimbotScript(BaseScript):
 
     def _target_via_battle_list_memory(self, creature: Creature, bot_engine) -> bool:
         """
-        Injeta o slot da battle list via escrita atomica de um unico DWORD.
-
-        Layout real em TARGET["target_battlelist_id"] (0x63FE5C):
-          bytes 0-2 (bits  0-23): slot + 1 (24 bits)
-          byte  3   (bits 24-31): type (0x01)
-
-        TARGET["target_battlelist_type"] (0x63FE5F) e o mesmo DWORD + 3 bytes.
+        Fallback: injeta via slot da battle list.
+        Mesmo mecanismo — incrementa attack_count apos escrever o slot.
         """
         slot = creature.battle_slot
         if slot < 0:
@@ -390,33 +393,36 @@ class AimbotScript(BaseScript):
             read_slot  = read_back & 0x00FFFFFF
             read_type  = (read_back >> 24) & 0xFF
 
-            if read_slot == slot_value and read_type == target_type:
-                self._log.debug(
-                    f"Memory BL target OK: {creature.name} "
-                    f"slot=0x{read_slot:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            if read_slot != slot_value or read_type != target_type:
+                self._log.warning(
+                    f"Memory BL verify falhou: escreveu DWORD=0x{packed_target:08X}; "
+                    f"leu DWORD=0x{read_back:08X}"
                 )
-                return True
+                return False
 
-            self._log.warning(
-                f"Memory BL verify falhou: escreveu slot=0x{slot_value:06X} "
-                f"type=0x{target_type:02X} DWORD=0x{packed_target:08X}; "
-                f"leu slot=0x{read_slot:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            self._log.debug(
+                f"Memory BL target OK: {creature.name} "
+                f"slot=0x{read_slot:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
             )
-            return False
+
+            # ATTACK_COUNT FIX: mesmo mecanismo do path principal
+            current_count = mr.read_uint(TARGET["attack_count"], use_cache=False)
+            mw.write_uint(TARGET["attack_count"], (current_count + 1) & 0xFFFFFFFF)
+            self._log.debug(f"attack_count BL: {current_count} -> {(current_count + 1) & 0xFFFFFFFF}")
+
+            return True
 
         except Exception as e:
             self._log.warning(f"Memory BL exception: {e}")
             return False
 
     def _target_via_tile_click(self, creature: Creature, player: Player, injector: KeyboardInjector) -> bool:
-        """Clique isometrico no tile — disponivel para uso externo, nao usado no path principal."""
         ox = self.config.get("viewport_offset_x", 0)
         oy = self.config.get("viewport_offset_y", 0)
         return injector.click_tile(creature.position.x, creature.position.y,
                                    player.position.x, player.position.y, ox, oy)
 
     def _target_by_battle_slot(self, creature: Creature, injector) -> bool:
-        """Clique no slot da battle list — disponivel para uso externo, nao usado no path principal."""
         slot = creature.battle_slot
         if slot < 0:
             return False
@@ -427,24 +433,43 @@ class AimbotScript(BaseScript):
         return injector.send_mouse_click(bx, sy)
 
     def _attack_target(self, player: Player, target: Creature, bot_engine) -> bool:
-        hotkey = self._get_attack_hotkey(target)
-        injector: KeyboardInjector = bot_engine.injector
+        """
+        Seleciona o alvo via memory injection (incrementando attack_count para
+        acionar o pacote 0xA1) e entao envia a hotkey de spell se configurada.
 
-        if self.config.get("use_memory_injection", True):
-            if self._target_via_memory(target, bot_engine):
-                injector.send_hotkey(hotkey)
-                return True
-            if self._target_via_battle_list_memory(target, bot_engine):
-                injector.send_hotkey(hotkey)
-                return True
+        Ordem correta:
+          1. _target_via_memory  -> escreve target_id + incrementa attack_count
+             O cliente envia o pacote Attack ao servidor automaticamente.
+          2. send_hotkey (opcional) -> dispara a spell/hotkey configurada no F1.
+             So enviada se attack_hotkey estiver configurado E for uma Fx valida.
+        """
+        if not self.config.get("use_memory_injection", True):
+            self._log.debug("Memory injection desligado via config")
+            return False
+
+        injector: KeyboardInjector = bot_engine.injector
+        targeted = False
+
+        if self._target_via_memory(target, bot_engine):
+            targeted = True
+        elif self._target_via_battle_list_memory(target, bot_engine):
+            targeted = True
+        else:
             self._log.error(
-                f"Memory injection falhou para {target.name} — "
-                f"nenhum fallback por clique (ElfBot-style). Verifique offsets."
+                f"Memory injection falhou para {target.name} — verifique offsets."
             )
             return False
 
-        self._log.debug("Memory injection desligado via config")
-        return False
+        if targeted:
+            hotkey = self._get_attack_hotkey(target)
+            if hotkey:
+                # Pequeno delay para o cliente processar o novo target
+                # antes de receber a hotkey de spell
+                time.sleep(0.050)
+                injector.send_hotkey(hotkey)
+                self._log.debug(f"Hotkey {hotkey} enviada para {target.name}")
+
+        return targeted
 
     def _try_combo_attack(self, player: Player, target: Creature, bot_engine) -> bool:
         if not self.config["enable_combo_attacks"]:
@@ -454,8 +479,7 @@ class AimbotScript(BaseScript):
         if not combo_spells:
             return False
 
-        # BUG B FIX (guard extra): garante que o alvo ainda esta no mesmo andar
-        # antes de tentar o combo, mesmo que _filter_creatures ja tenha filtrado.
+        # Guard extra: garante que o alvo ainda esta no mesmo andar
         if target.position.z != player.position.z:
             self._log.debug(
                 f"Combo ignorado: {target.name} em z={target.position.z}, "
