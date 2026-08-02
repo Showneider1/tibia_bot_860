@@ -3,9 +3,14 @@ from typing import List, Dict, Any
 from .base_script import BaseScript
 from src.infrastructure.logging.logger import get_logger
 
+# Prioridade minima para considerar um script como "critico".
+# Scripts com prioridade >= este valor podem bloquear scripts de menor
+# prioridade no mesmo tick (ex: HealingScript=100 bloqueia AimbotScript=50).
+_PREEMPT_THRESHOLD = 90
+
 
 class ScriptEngine:
-    """Motor de execução de scripts."""
+    """Motor de execucao de scripts."""
 
     def __init__(self):
         self._scripts: List[BaseScript] = []
@@ -23,7 +28,7 @@ class ScriptEngine:
         self._log.info(f"Script '{script_name}' removido.")
 
     def enable_script(self, script_name: str) -> bool:
-        """Habilita um script específico."""
+        """Habilita um script especifico."""
         for script in self._scripts:
             if script.name == script_name:
                 script.enabled = True
@@ -32,7 +37,7 @@ class ScriptEngine:
         return False
 
     def disable_script(self, script_name: str) -> bool:
-        """Desabilita um script específico."""
+        """Desabilita um script especifico."""
         for script in self._scripts:
             if script.name == script_name:
                 script.enabled = False
@@ -41,17 +46,29 @@ class ScriptEngine:
         return False
 
     def execute_all(self, context: Dict[str, Any]) -> None:
-        """Executa todos os scripts habilitados."""
+        """
+        Executa todos os scripts habilitados em ordem de prioridade.
+
+        BUG #5 FIX: preempcao por prioridade critica.
+        Se um script com prioridade >= _PREEMPT_THRESHOLD executar uma acao
+        (retornar True), scripts de prioridade menor nao sao executados no
+        mesmo tick. Isso garante que HealingScript (100) tem precedencia total
+        sobre AimbotScript (50) e CavebotScript (30) quando curar e necessario.
+        """
+        critical_acted = False
+
         for script in self._scripts:
             if not script.enabled:
                 continue
 
+            # BUG #5: se ja houve acao critica, pula scripts nao-criticos
+            if critical_acted and script.priority < _PREEMPT_THRESHOLD:
+                continue
+
             try:
                 executed = script.execute(context)
-                if executed:
-                    # Se script executou ação, pode querer pausar outros
-                    # (exemplo: healing tem prioridade sobre attack)
-                    pass
+                if executed and script.priority >= _PREEMPT_THRESHOLD:
+                    critical_acted = True
             except Exception as e:
                 self._log.error(f"Erro no script '{script.name}': {e}", exc_info=True)
 

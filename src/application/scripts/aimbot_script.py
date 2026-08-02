@@ -1,5 +1,5 @@
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from .base_script import BaseScript
 from src.core.entities.player import Player
 from src.core.entities.creature import Creature
@@ -11,12 +11,12 @@ from src.infrastructure.injection.keyboard_injector import KeyboardInjector
 
 _HOTKEYS = frozenset({"F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"})
 
+
 class AimbotScript(BaseScript):
     def __init__(self):
         super().__init__("AimBot")
         self.priority = 50
         # BUG #1 FIX: enabled=True para que o ScriptEngine execute este script.
-        # Antes estava False, impedindo qualquer ataque.
         self.enabled = True
         self.config = {
             "enabled": True,
@@ -33,7 +33,7 @@ class AimbotScript(BaseScript):
             "enable_combo_attacks": True,
             "combo_spells": [
                 {"spell": "exori gran", "cooldown": 4.0, "mana_cost": 120, "max_distance": 1},
-                {"spell": "exori hur", "cooldown": 6.0, "mana_cost": 40, "max_distance": 3},
+                {"spell": "exori hur",  "cooldown": 6.0, "mana_cost": 40,  "max_distance": 3},
             ],
             "xp_values": {
                 "Dragon": 700,
@@ -72,21 +72,51 @@ class AimbotScript(BaseScript):
         self._last_combo_time = 0
         self._combo_cooldowns: Dict[str, float] = {}
         self._name_to_priority: Dict[str, dict] = {}
-        self._name_cache_time = 0.0
+        # OPT #1 FIX: invalida cache por mudanca de config, nao por TTL em loop.
+        # Guardamos o id() da lista de prioridades; se mudar, reconstruimos.
+        self._priorities_id: int = id(self.config.get("target_priorities", []))
 
-    def _rebuild_name_cache(self):
+    # ------------------------------------------------------------------
+    # OPT #1: Cache de prioridades invalidado por mudanca de config
+    # ------------------------------------------------------------------
+
+    def _rebuild_name_cache(self) -> None:
         priorities = self.config.get("target_priorities", [])
+        # OPT #3 FIX: limpa entradas de _combo_cooldowns que nao existem mais
+        # na config atual, evitando crescimento indefinido do dicionario.
+        current_spell_names: Set[str] = {
+            c["spell"] for c in self.config.get("combo_spells", []) if "spell" in c
+        }
+        stale_keys = [k for k in self._combo_cooldowns if k not in current_spell_names]
+        for k in stale_keys:
+            del self._combo_cooldowns[k]
+
         self._name_to_priority = {
             p.get("name", "").strip().lower(): p
-            for p in priorities if p.get("name")
+            for p in priorities
+            # BUG #2 FIX: descarta entradas sem "name" (dicts vazios {}) para
+            # evitar que has_priorities=True descarte todas as criaturas.
+            if p.get("name")
         }
-        self._name_cache_time = time.time()
+        self._priorities_id = id(priorities)
 
     def _priority_for_creature(self, name: str) -> Optional[dict]:
-        key = name.strip().lower()
-        if not self._name_to_priority or time.time() - self._name_cache_time > 2.0:
+        # OPT #1 FIX: invalida cache apenas quando a referencia da lista muda.
+        current_list = self.config.get("target_priorities", [])
+        if id(current_list) != self._priorities_id:
             self._rebuild_name_cache()
-        return self._name_to_priority.get(key)
+        return self._name_to_priority.get(name.strip().lower())
+
+    # ------------------------------------------------------------------
+    # BUG #2 FIX: has_priorities so e True quando existem entradas validas
+    # (com campo "name" preenchido) apos a filtragem do _rebuild_name_cache.
+    # ------------------------------------------------------------------
+
+    def _has_valid_priorities(self) -> bool:
+        current_list = self.config.get("target_priorities", [])
+        if id(current_list) != self._priorities_id:
+            self._rebuild_name_cache()
+        return bool(self._name_to_priority)
 
     def execute(self, context: Dict[str, Any]) -> bool:
         player: Player = context.get("player")
@@ -139,10 +169,7 @@ class AimbotScript(BaseScript):
 
         pri = self._priority_for_creature(target.name)
         creature_mode = pri.get("mode", "Attack") if pri else "Attack"
-        if pri:
-            spell_range = pri.get("distance", 1)
-        else:
-            spell_range = self.config["max_distance"]
+        spell_range = pri.get("distance", self.config["max_distance"]) if pri else self.config["max_distance"]
 
         distance = player.position.distance_chebyshev(target.position)
 
@@ -182,7 +209,8 @@ class AimbotScript(BaseScript):
 
     def _filter_creatures(self, creatures: List[Creature], player: Player) -> List[Creature]:
         filtered = []
-        has_priorities = bool(self.config.get("target_priorities"))
+        # BUG #2 FIX: usa _has_valid_priorities() que ignora dicts vazios {}.
+        has_priorities = self._has_valid_priorities()
 
         for creature in creatures:
             if creature.id == player.id:
@@ -193,15 +221,9 @@ class AimbotScript(BaseScript):
                 if creature.name not in self.config["target_whitelist"]:
                     continue
 
-            # BUG #4 FIX: hp_bar=0 pode ser temporário (cliente ainda não atualizou).
-            # Antes descartava a criatura imediatamente. Agora só descarta se
-            # health for estritamente negativo, o que nunca ocorre por Stats.health
-            # ser clampado em 0, então usamos a condição mais segura: só filtra
-            # se hp_bar == 0 E o nome já é conhecido (slot consolidado).
             if creature.stats.health < 0:
                 continue
             if creature.stats.health == 0 and creature.name != "Unknown":
-                # Criatura com nome conhecido e hp=0: provavelmente morta, descarta.
                 continue
 
             pri = self._priority_for_creature(creature.name) if has_priorities else None
@@ -232,9 +254,9 @@ class AimbotScript(BaseScript):
         if self._current_target and self._current_target in creatures:
             current_distance = player.position.distance_chebyshev(self._current_target.position)
             if (self._current_target.stats.health > 0 and
-                current_distance <= self.config["max_distance"]):
+                    current_distance <= self.config["max_distance"]):
                 if self.config["prefer_low_hp_for_kill"]:
-                    low_hp_target = self._find_low_hp_target(creatures)
+                    low_hp_target = self._find_low_hp_target(player, creatures)
                     if low_hp_target and low_hp_target != self._current_target:
                         return low_hp_target
                 return self._current_target
@@ -261,9 +283,23 @@ class AimbotScript(BaseScript):
     def _select_lowest_hp(self, creatures: List[Creature]) -> Optional[Creature]:
         return min(creatures, key=lambda c: c.stats.health)
 
-    def _find_low_hp_target(self, creatures: List[Creature]) -> Optional[Creature]:
-        threshold = self.config["low_hp_threshold"]
-        low_hp_creatures = [c for c in creatures if c.stats.health <= threshold]
+    def _find_low_hp_target(
+        self, player: Player, creatures: List[Creature]
+    ) -> Optional[Creature]:
+        """
+        BUG #4 FIX: threshold comparado contra a barra de HP percentual (0-100)
+        lida da memoria, nao contra HP absoluto da criatura. Como creature.stats.health
+        ja e a barra 0-100, a comparacao esta correta semanticamente; o fix aqui
+        e garantir que o alvo de baixo HP tambem esteja dentro do alcance de ataque,
+        evitando troca desnecessaria de alvo para criatura fora de range.
+        """
+        threshold = self.config["low_hp_threshold"]  # 0-100 (barra de HP %)
+        max_dist = self.config["max_distance"]
+        low_hp_creatures = [
+            c for c in creatures
+            if c.stats.health <= threshold
+            and player.position.distance_chebyshev(c.position) <= max_dist
+        ]
         if not low_hp_creatures:
             return None
         return min(low_hp_creatures, key=lambda c: c.stats.health)
@@ -287,11 +323,10 @@ class AimbotScript(BaseScript):
         return self.config["attack_hotkey"]
 
     def _target_via_memory(self, creature: Creature, bot_engine) -> bool:
-        """Injeta o ID da criatura diretamente na memória (ElfBot-style).
-
-        BUG #3 FIX: usa write_uint (unsigned 32-bit) em vez de write_int
-        (signed). IDs de criaturas são DWORD/uint32; valores > 0x7FFFFFFF
-        causavam OverflowError silencioso com write_int.
+        """
+        Injeta o ID da criatura diretamente na memoria (ElfBot-style).
+        Usa write_uint (unsigned 32-bit); IDs > 0x7FFFFFFF causavam
+        OverflowError silencioso com write_int.
         """
         try:
             mw: MemoryWriter = bot_engine.memory_writer
@@ -313,10 +348,7 @@ class AimbotScript(BaseScript):
             return False
 
     def _target_via_battle_list_memory(self, creature: Creature, bot_engine) -> bool:
-        """Injeta o slot da battle list via memória.
-
-        BUG #3 FIX: usa write_uint para o slot (unsigned 32-bit).
-        """
+        """Injeta o slot da battle list via memoria (unsigned 32-bit)."""
         slot = creature.battle_slot
         if slot < 0:
             return False

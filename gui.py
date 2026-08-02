@@ -47,6 +47,10 @@ def _build_engine():
         from src.infrastructure.injection.keyboard_injector import KeyboardInjector
         from src.application.bot_engine import BotEngine
         from src.core.constants.addresses_860 import PLAYER, BATTLE_LIST, CREATURE, PLAYER_EXTRA
+        from src.application.scripts.aimbot_script import AimbotScript
+        from src.application.scripts.healing_script import HealingScript
+        from src.application.scripts.buff_script import BuffScript
+        from src.application.scripts.cavebot_script import CavebotScript
 
         pm = ProcessManager()
         mr = MemoryReader(pm)
@@ -60,6 +64,16 @@ def _build_engine():
             battle_list_addresses=BATTLE_LIST,
             creature_offsets=CREATURE,
         )
+
+        # BUG #1 FIX: registrar todos os scripts no ScriptEngine.
+        # Antes apenas HealingScript/BuffScript/CavebotScript eram registrados
+        # implicitamente; AimbotScript nunca era adicionado e portanto nunca
+        # executava, fazendo o char nunca atacar.
+        engine.script_engine.register(HealingScript())
+        engine.script_engine.register(AimbotScript())
+        engine.script_engine.register(BuffScript())
+        engine.script_engine.register(CavebotScript())
+
         return engine
     except Exception as exc:
         logging.getLogger("gui").error(f"Falha ao criar BotEngine: {exc}", exc_info=True)

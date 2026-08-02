@@ -18,6 +18,10 @@ Historico de correcoes:
          funcionando em background. Movimento usa teclas Numpad que o
          Tibia processa mesmo com chat aberto.
          Metodo identico ao usado por ElfBot/XenoBot.
+  v4.1:  BUG #6 FIX: delay apos VK_RETURN em cast_spell aumentado de
+         50ms para 100ms. PostMessage e assincrono; 50ms nao era suficiente
+         para o Tibia processar o ENTER e abrir o chat antes dos WM_CHAR
+         chegarem, causando falhas silenciosas no cast.
 
 Tibia 8.60 processa movimento via window proc. PostMessage(WM_KEYDOWN/WM_KEYUP)
 injeta na fila de mensagens da janela alvo sem exigir foco.
@@ -39,14 +43,6 @@ from src.infrastructure.logging.logger import get_logger
 
 # ---------------------------------------------------------------------------
 # WinAPI structs para SendInput
-#
-# sizeof(INPUT) esperado pelo Windows:
-#   32-bit: DWORD(4) + union(24) = 28  [ULONG_PTR=4, KEYBDINPUT=16]
-#   64-bit: DWORD(4) + pad(4) + union(24) = 32  [ULONG_PTR=8, KEYBDINPUT=24]
-#
-# NAO inserir campos de padding manual: o ctypes calcula automaticamente
-# o alinhamento correto para cada plataforma quando os tipos reais sao
-# declarados. Padding manual quebra o calculo em uma das arquiteturas.
 # ---------------------------------------------------------------------------
 
 INPUT_KEYBOARD        = 1
@@ -62,9 +58,6 @@ class KEYBDINPUT(ctypes.Structure):
         ("wScan",       wintypes.WORD),
         ("dwFlags",     wintypes.DWORD),
         ("time",        wintypes.DWORD),
-        # ULONG_PTR: 4 bytes em 32-bit, 8 bytes em 64-bit.
-        # c_ulonglong garante 8 bytes em ambos; o ctypes insere o padding
-        # de alinhamento necessario antes deste campo automaticamente.
         ("dwExtraInfo", ctypes.c_ulonglong),
     ]
 
@@ -76,7 +69,6 @@ class _INPUT_UNION(ctypes.Union):
 
 
 class INPUT(ctypes.Structure):
-    # _anonymous_ expoe 'ki' diretamente em INPUT (inp.ki.wVk)
     _anonymous_ = ("u",)
     _fields_ = [
         ("type", wintypes.DWORD),
@@ -84,9 +76,6 @@ class INPUT(ctypes.Structure):
     ]
 
 
-# sizeof esperado:
-#   32-bit Python: 28
-#   64-bit Python: 32
 _POINTER_SIZE   = ctypes.sizeof(ctypes.c_void_p)
 _EXPECTED_SIZES = {4: 28, 8: 32}
 _EXPECTED_SIZE  = _EXPECTED_SIZES.get(_POINTER_SIZE)
@@ -101,13 +90,12 @@ if _EXPECTED_SIZE is not None:
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.SendInput.argtypes = [
-    wintypes.UINT,          # nInputs
-    ctypes.POINTER(INPUT),  # pInputs
-    ctypes.c_int,           # cbSize
+    wintypes.UINT,
+    ctypes.POINTER(INPUT),
+    ctypes.c_int,
 ]
 _user32.SendInput.restype = wintypes.UINT
 
-# Mapa VK -> (scancode OEM, extended_key)
 _VK_SCAN_MAP = {
     win32con.VK_UP:      (0x48, True),
     win32con.VK_DOWN:    (0x50, True),
@@ -127,13 +115,6 @@ _VK_SCAN_MAP = {
 
 
 def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
-    """
-    Constroi struct INPUT para SendInput.
-
-    KEYEVENTF_SCANCODE: Tibia identifica a tecla pelo scancode OEM,
-    ignorando o layout do teclado (ABNT2 / US). wVk = 0 obrigatorio.
-    dwExtraInfo = 0 (inteiro ULONG_PTR, nao ponteiro).
-    """
     entry = _VK_SCAN_MAP.get(vk_code)
     if entry:
         scancode, extended = entry
@@ -160,11 +141,6 @@ def _build_input(vk_code: int, key_up: bool = False) -> INPUT:
 class KeyboardInjector(ICommandInjector):
     """
     Injeta teclas via PostMessage WM_KEYDOWN/WM_KEYUP no HWND do cliente.
-
-    PostMessage envia eventos diretamente para a fila de mensagens da janela
-    alvo, sem exigir foreground. Movimento usa VK Numpad (Tibia processa
-    mesmo com chat aberto). Cast de magias envia texto caractere a caractere
-    (Tibia abre chat automaticamente).
     """
 
     def __init__(
@@ -176,10 +152,6 @@ class KeyboardInjector(ICommandInjector):
         self._process_id = process_id
         self._hwnd = None
         self._log = get_logger("KeyboardInjector")
-
-    # ------------------------------------------------------------------
-    # Resolucao de janela
-    # ------------------------------------------------------------------
 
     def _find_window_by_pid(self, pid: int) -> bool:
         if win32process is None:
@@ -240,17 +212,11 @@ class KeyboardInjector(ICommandInjector):
         self._log.warning("Janela do cliente nao encontrada.")
         return False
 
-    # ------------------------------------------------------------------
-    # API publica
-    # ------------------------------------------------------------------
-
     def set_process_id(self, process_id: int | None) -> None:
-        """Atualiza PID e invalida hwnd em cache."""
         self._process_id = process_id
         self._hwnd = None
 
     def focus_client(self) -> bool:
-        """Mantido por compatibilidade; nao e necessario para PostMessage."""
         if not self._hwnd and not self._find_window():
             return False
         try:
@@ -261,11 +227,6 @@ class KeyboardInjector(ICommandInjector):
             return False
 
     def send_key_background(self, vk_code: int) -> bool:
-        """
-        Envia KEYDOWN + KEYUP via PostMessage para o HWND alvo.
-
-        Returns True se enviado, False se HWND invalido.
-        """
         if not self._hwnd and not self._find_window():
             self._log.error("HWND nao encontrado para PostMessage")
             return False
@@ -292,7 +253,6 @@ class KeyboardInjector(ICommandInjector):
             return False
 
     def _send_text_background(self, text: str) -> None:
-        """Digita texto usando WM_CHAR (PostMessage nao passa por TranslateMessage)."""
         if not self._hwnd and not self._find_window():
             return
         for ch in text:
@@ -307,10 +267,6 @@ class KeyboardInjector(ICommandInjector):
         win32gui.PostMessage(self._hwnd, win32con.WM_KEYUP,   vk_enter, lparam_up)
 
     def send_mouse_click(self, client_x: int, client_y: int) -> bool:
-        """Envia clique do mouse via PostMessage (assincrono) — mesmo mecanismo do F1 que funciona.
-
-        Returns True se o clique foi enviado, False se HWND invalido.
-        """
         if not self._hwnd and not self._find_window():
             self._log.error("HWND nao encontrado para mouse click")
             return False
@@ -328,7 +284,6 @@ class KeyboardInjector(ICommandInjector):
             return False
 
     def get_client_size(self) -> tuple:
-        """Retorna (width, height) da area cliente do HWND via GetClientRect."""
         if not self._hwnd and not self._find_window():
             return (480, 360)
         try:
@@ -344,15 +299,6 @@ class KeyboardInjector(ICommandInjector):
         client_width: int = 480, client_height: int = 360,
         offset_x: int = 0, offset_y: int = 0
     ) -> tuple:
-        """Converte coordenadas de tile (isometrico) para pixels na janela do Tibia.
-
-        Formula isometrica padrao Tibia 8.60:
-          screen_x = centro_x + (dx - dy) * 16
-          screen_y = centro_y + (dx + dy) * 8
-
-        offset_x/y desloca o centro do viewport (ex: -100 para mover click pra esquerda
-        se a janela do jogo nao ocupar todo o client area).
-        """
         dx = tile_x - player_x
         dy = tile_y - player_y
         center_x = (client_width // 2) + offset_x
@@ -363,7 +309,6 @@ class KeyboardInjector(ICommandInjector):
 
     def click_tile(self, tile_x: int, tile_y: int, player_x: int, player_y: int,
                    offset_x: int = 0, offset_y: int = 0) -> bool:
-        """Converte tile (x,y) para pixel e clica na tela do Tibia. Returns True se clicou."""
         w, h = self.get_client_size()
         sx, sy = self.tile_to_screen(tile_x, tile_y, player_x, player_y, w, h, offset_x, offset_y)
         self._log.info(f"click_tile: tile({tile_x},{tile_y}) player({player_x},{player_y}) "
@@ -371,22 +316,26 @@ class KeyboardInjector(ICommandInjector):
         return self.send_mouse_click(sx, sy)
 
     def say(self, text: str) -> None:
-        """Abre o chat, digita a mensagem e envia."""
         self.send_key_background(win32con.VK_RETURN)
         time.sleep(0.05)
         self._send_text_background(text)
 
     def cast_spell(self, spell_words: str) -> None:
+        """
+        BUG #6 FIX: delay apos VK_RETURN aumentado de 50ms para 100ms.
+        PostMessage e assincrono — o Tibia precisa processar o ENTER e abrir
+        o chat antes dos WM_CHAR chegarem. 50ms era insuficiente em sistemas
+        com carga de CPU moderada/alta, causando caracteres perdidos.
+        """
         self._log.debug(f"Casting spell: {spell_words}")
         if spell_words.upper() in {"F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"}:
             self.send_hotkey(spell_words)
             return
         self.send_key_background(win32con.VK_RETURN)
-        time.sleep(0.050)
+        time.sleep(0.100)  # BUG #6 FIX: era 0.050
         self._send_text_background(spell_words)
 
     def send_hotkey(self, key: str) -> bool:
-        """Envia F1-F12 em background. Returns True se enviado."""
         mapping = {
             "F1":  win32con.VK_F1,  "F2":  win32con.VK_F2,  "F3":  win32con.VK_F3,
             "F4":  win32con.VK_F4,  "F5":  win32con.VK_F5,  "F6":  win32con.VK_F6,

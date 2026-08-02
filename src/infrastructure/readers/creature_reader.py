@@ -36,10 +36,14 @@ class CreatureReader:
                 try:
                     base = start_addr.with_offset(slot_index * step)
 
-                    creature_id = self._memory.read_int(
+                    # BUG #7 FIX: creature IDs em Tibia 8.60 sao DWORD (uint32).
+                    # read_int (signed) retornaria negativo para IDs > 0x7FFFFFFF,
+                    # fazendo o filtro `<= 0` descartar criaturas validas.
+                    # read_uint garante que qualquer ID > 0 seja tratado corretamente.
+                    creature_id = self._memory.read_uint(
                         base.with_offset(self._offsets["id"])
                     )
-                    if creature_id <= 0:
+                    if creature_id == 0:
                         continue  # slot vazio
 
                     x = self._memory.read_int(base.with_offset(self._offsets["x"]))
