@@ -16,7 +16,6 @@ class AimbotScript(BaseScript):
     def __init__(self):
         super().__init__("AimBot")
         self.priority = 50
-        # BUG #1 FIX: enabled=True para que o ScriptEngine execute este script.
         self.enabled = True
         self.config = {
             "enabled": True,
@@ -72,18 +71,14 @@ class AimbotScript(BaseScript):
         self._last_combo_time = 0
         self._combo_cooldowns: Dict[str, float] = {}
         self._name_to_priority: Dict[str, dict] = {}
-        # OPT #1 FIX: invalida cache por mudanca de config, nao por TTL em loop.
-        # Guardamos o id() da lista de prioridades; se mudar, reconstruimos.
         self._priorities_id: int = id(self.config.get("target_priorities", []))
 
     # ------------------------------------------------------------------
-    # OPT #1: Cache de prioridades invalidado por mudanca de config
+    # Priority cache
     # ------------------------------------------------------------------
 
     def _rebuild_name_cache(self) -> None:
         priorities = self.config.get("target_priorities", [])
-        # OPT #3 FIX: limpa entradas de _combo_cooldowns que nao existem mais
-        # na config atual, evitando crescimento indefinido do dicionario.
         current_spell_names: Set[str] = {
             c["spell"] for c in self.config.get("combo_spells", []) if "spell" in c
         }
@@ -94,23 +89,15 @@ class AimbotScript(BaseScript):
         self._name_to_priority = {
             p.get("name", "").strip().lower(): p
             for p in priorities
-            # BUG #2 FIX: descarta entradas sem "name" (dicts vazios {}) para
-            # evitar que has_priorities=True descarte todas as criaturas.
             if p.get("name")
         }
         self._priorities_id = id(priorities)
 
     def _priority_for_creature(self, name: str) -> Optional[dict]:
-        # OPT #1 FIX: invalida cache apenas quando a referencia da lista muda.
         current_list = self.config.get("target_priorities", [])
         if id(current_list) != self._priorities_id:
             self._rebuild_name_cache()
         return self._name_to_priority.get(name.strip().lower())
-
-    # ------------------------------------------------------------------
-    # BUG #2 FIX: has_priorities so e True quando existem entradas validas
-    # (com campo "name" preenchido) apos a filtragem do _rebuild_name_cache.
-    # ------------------------------------------------------------------
 
     def _has_valid_priorities(self) -> bool:
         current_list = self.config.get("target_priorities", [])
@@ -209,7 +196,6 @@ class AimbotScript(BaseScript):
 
     def _filter_creatures(self, creatures: List[Creature], player: Player) -> List[Creature]:
         filtered = []
-        # BUG #2 FIX: usa _has_valid_priorities() que ignora dicts vazios {}.
         has_priorities = self._has_valid_priorities()
 
         for creature in creatures:
@@ -286,14 +272,7 @@ class AimbotScript(BaseScript):
     def _find_low_hp_target(
         self, player: Player, creatures: List[Creature]
     ) -> Optional[Creature]:
-        """
-        BUG #4 FIX: threshold comparado contra a barra de HP percentual (0-100)
-        lida da memoria, nao contra HP absoluto da criatura. Como creature.stats.health
-        ja e a barra 0-100, a comparacao esta correta semanticamente; o fix aqui
-        e garantir que o alvo de baixo HP tambem esteja dentro do alcance de ataque,
-        evitando troca desnecessaria de alvo para criatura fora de range.
-        """
-        threshold = self.config["low_hp_threshold"]  # 0-100 (barra de HP %)
+        threshold = self.config["low_hp_threshold"]
         max_dist = self.config["max_distance"]
         low_hp_creatures = [
             c for c in creatures
@@ -324,59 +303,113 @@ class AimbotScript(BaseScript):
 
     def _target_via_memory(self, creature: Creature, bot_engine) -> bool:
         """
-        Injeta o ID da criatura diretamente na memoria (ElfBot-style).
-        Usa write_uint (unsigned 32-bit); IDs > 0x7FFFFFFF causavam
-        OverflowError silencioso com write_int.
+        Injeta o ID da criatura via escrita atomica de um unico DWORD.
+
+        Layout real do Tibia 8.60 em TARGET["target_id"] (0x63FE64):
+          bytes 0-2 (bits  0-23): creature ID (24 bits)
+          byte  3   (bits 24-31): target type/mode (0x01 = attack)
+
+        TARGET["target_mode"] (0x63FE67) e o mesmo DWORD deslocado 3 bytes,
+        entao escrever separado corrompe o ID. Empacotamos tudo em uint32.
         """
         try:
             mw: MemoryWriter = bot_engine.memory_writer
             mr: MemoryReader = bot_engine.memory_reader
-            ok1 = mw.write_uint(TARGET["target_id"], creature.id)
-            ok2 = mw.write_bytes(TARGET["target_mode"], b'\x01')
-            if ok1 and ok2:
-                read_id = mr.read_uint(TARGET["target_id"], use_cache=False)
-                if read_id == creature.id:
-                    self._log.debug(f"Memory target OK: {creature.name} (ID={creature.id})")
-                    return True
-                else:
-                    self._log.warning(f"Memory verify falhou: escreveu {creature.id}, leu {read_id}")
-                    return False
-            self._log.warning(f"Memory target write retornou ok1={ok1} ok2={ok2} para {creature.name}")
+
+            expected_id   = creature.id & 0x00FFFFFF
+            target_type   = 0x01
+            packed_target = expected_id | (target_type << 24)
+
+            ok = mw.write_uint(TARGET["target_id"], packed_target)
+            if not ok:
+                self._log.warning(
+                    f"Memory target write retornou False para {creature.name} "
+                    f"(ID=0x{expected_id:06X} DWORD=0x{packed_target:08X})"
+                )
+                return False
+
+            read_back = mr.read_uint(TARGET["target_id"], use_cache=False)
+            read_id   = read_back & 0x00FFFFFF
+            read_type = (read_back >> 24) & 0xFF
+
+            if read_id == expected_id and read_type == target_type:
+                self._log.debug(
+                    f"Memory target OK: {creature.name} "
+                    f"ID=0x{read_id:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+                )
+                return True
+
+            self._log.warning(
+                f"Memory verify falhou: escreveu ID=0x{expected_id:06X} "
+                f"type=0x{target_type:02X} DWORD=0x{packed_target:08X}; "
+                f"leu ID=0x{read_id:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            )
             return False
+
         except Exception as e:
             self._log.warning(f"Memory target exception: {e}")
             return False
 
     def _target_via_battle_list_memory(self, creature: Creature, bot_engine) -> bool:
-        """Injeta o slot da battle list via memoria (unsigned 32-bit)."""
+        """
+        Injeta o slot da battle list via escrita atomica de um unico DWORD.
+
+        Layout real em TARGET["target_battlelist_id"] (0x63FE5C):
+          bytes 0-2 (bits  0-23): slot + 1 (24 bits)
+          byte  3   (bits 24-31): type (0x01)
+
+        TARGET["target_battlelist_type"] (0x63FE5F) e o mesmo DWORD + 3 bytes.
+        """
         slot = creature.battle_slot
         if slot < 0:
             return False
         try:
             mw: MemoryWriter = bot_engine.memory_writer
             mr: MemoryReader = bot_engine.memory_reader
-            ok1 = mw.write_uint(TARGET["target_battlelist_id"], slot + 1)
-            ok2 = mw.write_bytes(TARGET["target_battlelist_type"], b'\x01')
-            if ok1 and ok2:
-                read_slot = mr.read_uint(TARGET["target_battlelist_id"], use_cache=False)
-                if read_slot == slot + 1:
-                    self._log.debug(f"Memory battle list target: {creature.name} slot={slot}")
-                    return True
-                self._log.warning(f"Memory BL verify falhou: escreveu slot={slot+1}, leu {read_slot}")
+
+            slot_value    = (slot + 1) & 0x00FFFFFF
+            target_type   = 0x01
+            packed_target = slot_value | (target_type << 24)
+
+            ok = mw.write_uint(TARGET["target_battlelist_id"], packed_target)
+            if not ok:
+                self._log.warning(
+                    f"Memory BL write retornou False para {creature.name} "
+                    f"slot={slot} DWORD=0x{packed_target:08X}"
+                )
                 return False
-            self._log.warning(f"Memory BL write retornou ok1={ok1} ok2={ok2}")
+
+            read_back  = mr.read_uint(TARGET["target_battlelist_id"], use_cache=False)
+            read_slot  = read_back & 0x00FFFFFF
+            read_type  = (read_back >> 24) & 0xFF
+
+            if read_slot == slot_value and read_type == target_type:
+                self._log.debug(
+                    f"Memory BL target OK: {creature.name} "
+                    f"slot=0x{read_slot:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+                )
+                return True
+
+            self._log.warning(
+                f"Memory BL verify falhou: escreveu slot=0x{slot_value:06X} "
+                f"type=0x{target_type:02X} DWORD=0x{packed_target:08X}; "
+                f"leu slot=0x{read_slot:06X} type=0x{read_type:02X} DWORD=0x{read_back:08X}"
+            )
             return False
+
         except Exception as e:
             self._log.warning(f"Memory BL exception: {e}")
             return False
 
     def _target_via_tile_click(self, creature: Creature, player: Player, injector: KeyboardInjector) -> bool:
+        """Clique isometrico no tile — disponivel para uso externo, nao usado no path principal."""
         ox = self.config.get("viewport_offset_x", 0)
         oy = self.config.get("viewport_offset_y", 0)
         return injector.click_tile(creature.position.x, creature.position.y,
                                    player.position.x, player.position.y, ox, oy)
 
     def _target_by_battle_slot(self, creature: Creature, injector) -> bool:
+        """Clique no slot da battle list — disponivel para uso externo, nao usado no path principal."""
         slot = creature.battle_slot
         if slot < 0:
             return False
@@ -390,33 +423,20 @@ class AimbotScript(BaseScript):
         hotkey = self._get_attack_hotkey(target)
         injector: KeyboardInjector = bot_engine.injector
 
-        # 1) Memory injection — target ID direto (mais rapido e confiavel)
         if self.config.get("use_memory_injection", True):
             if self._target_via_memory(target, bot_engine):
                 injector.send_hotkey(hotkey)
                 return True
-            # 1b) Fallback via battle list index na memoria
             if self._target_via_battle_list_memory(target, bot_engine):
                 injector.send_hotkey(hotkey)
                 return True
-            self._log.warning("Memory injection falhou — tentando metodos alternativos")
-        else:
-            self._log.debug("Memory injection desligado via config")
+            self._log.error(
+                f"Memory injection falhou para {target.name} — "
+                f"nenhum fallback por clique (ElfBot-style). Verifique offsets."
+            )
+            return False
 
-        # 2) Tile click (isometrico, universal)
-        if self._target_via_tile_click(target, player, injector):
-            time.sleep(0.050)
-            injector.send_hotkey(hotkey)
-            return True
-        self._log.warning("Tile click falhou — tentando battle list")
-
-        # 3) Battle list slot click (fallback final)
-        if self._target_by_battle_slot(target, injector):
-            time.sleep(0.050)
-            injector.send_hotkey(hotkey)
-            return True
-
-        self._log.error(f"Todas as formas de targeting falharam para {target.name}")
+        self._log.debug("Memory injection desligado via config")
         return False
 
     def _try_combo_attack(self, player: Player, target: Creature, bot_engine) -> bool:
@@ -448,15 +468,17 @@ class AimbotScript(BaseScript):
                 continue
 
             if self.config.get("use_memory_injection", True):
-                if not self._target_via_memory(target, bot_engine):
-                    if not self._target_via_battle_list_memory(target, bot_engine):
-                        if not self._target_via_tile_click(target, player, injector):
-                            if not self._target_by_battle_slot(target, injector):
-                                continue
+                if self._target_via_memory(target, bot_engine):
+                    pass
+                elif self._target_via_battle_list_memory(target, bot_engine):
+                    pass
+                else:
+                    self._log.warning(f"Combo {spell_name}: memory injection falhou para {target.name}, pulando.")
+                    continue
             else:
-                if not self._target_via_tile_click(target, player, injector):
-                    if not self._target_by_battle_slot(target, injector):
-                        continue
+                self._log.debug("Memory injection desligado — combo ignorado.")
+                continue
+
             time.sleep(0.050)
 
             if spell_name.upper() in _HOTKEYS:
